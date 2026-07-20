@@ -7,8 +7,8 @@ interface ActionCardProps {
   onResolve: (actionId: string, verb: 'confirm' | 'cancel') => void
 }
 
-/** Confirmation card for a staged destructive action. The agent can only
- * stage a deletion — nothing runs until the user presses Confirm here. */
+/** Confirmation card for a staged write/destructive action. Nothing runs
+ * until the user presses Confirm here. */
 export function ActionCard({ action, onResolve }: ActionCardProps) {
   const [busy, setBusy] = useState(false)
   const [showOutput, setShowOutput] = useState(false)
@@ -19,12 +19,26 @@ export function ActionCard({ action, onResolve }: ActionCardProps) {
     onResolve(action.id, verb)
   }
 
+  const resourceEntries = Object.entries(action.resource)
+  const orderedEntries = [
+    ...resourceEntries.filter(([key]) => key === 'Summary'),
+    ...resourceEntries.filter(([key]) => key !== 'Summary'),
+  ]
+
   if (action.status === 'pending') {
     return (
       <div className="action-card action-card--pending">
-        <div className="action-card__header">Confirm deletion</div>
+        <div className="action-card__header">Confirm action</div>
+        {action.label && (
+          <div className="action-card__rows">
+            <div className="action-card__row">
+              <span className="action-card__key">Action</span>
+              <span className="action-card__value">{action.label}</span>
+            </div>
+          </div>
+        )}
         <div className="action-card__rows">
-          {Object.entries(action.resource).map(([key, value]) => (
+          {orderedEntries.map(([key, value]) => (
             <div key={key} className="action-card__row">
               <span className="action-card__key">{key}</span>
               <span
@@ -42,7 +56,7 @@ export function ActionCard({ action, onResolve }: ActionCardProps) {
             disabled={busy}
             onClick={() => resolve('confirm')}
           >
-            Confirm delete
+            Confirm
           </button>
           <button
             type="button"
@@ -61,7 +75,7 @@ export function ActionCard({ action, onResolve }: ActionCardProps) {
     return (
       <div className="action-card action-card--done">
         <div className="action-card__result action-card__result--muted">
-          Cancelled — {action.detail}
+          Cancelled — {action.label || action.detail}
         </div>
       </div>
     )
@@ -86,7 +100,9 @@ export function ActionCard({ action, onResolve }: ActionCardProps) {
             <span className="action-card__check">
               <CheckIcon size={8} strokeWidth={3.5} />
             </span>
-            <span className="action-card__result">{action.resultSummary ?? `Deleted — ${action.detail}`}</span>
+            <span className="action-card__result">
+              {action.resultSummary ?? `Completed — ${action.label || action.detail}`}
+            </span>
           </>
         )}
         {hasOutput && (

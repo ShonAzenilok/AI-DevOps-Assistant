@@ -77,7 +77,11 @@ class McpClientManager:
             self._stack = stack
             self._session = session
             self._tools = list(tools_result.tools)
-            logger.info("Connected to AWS MCP Server with %d tools.", len(self._tools))
+            logger.info(
+                "Connected to AWS MCP Server with %d tools: %s",
+                len(self._tools),
+                ", ".join(tool.name for tool in self._tools),
+            )
         except Exception:
             with suppress(Exception):
                 await stack.aclose()

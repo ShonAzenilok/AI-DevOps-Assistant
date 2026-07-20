@@ -12,16 +12,17 @@ from app.config import settings
 from app.core.errors import format_error
 from app.core.session import SessionStore
 from app.services.actions.registry import ActionRegistry
+from app.services.bedrock.client import BedrockClient
 from app.services.mcp.manager import McpClientManager
-from app.services.ollama.client import OllamaClient
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+_session_store = SessionStore()
 app_state = AppState(
-    session_store=SessionStore(),
+    session_store=_session_store,
     mcp_manager=McpClientManager(),
-    ollama_client=OllamaClient(),
+    bedrock_client=BedrockClient(_session_store),
     action_registry=ActionRegistry(),
 )
 

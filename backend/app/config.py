@@ -13,9 +13,12 @@ class Settings(BaseSettings):
     aws_mcp_service: str = "aws-mcp"
     aws_mcp_region: str = "us-east-1"
 
-    ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3.5:4b"
-    ollama_timeout: float = 120.0
+    # Cross-region inference profile ID (bare foundation-model IDs are rejected
+    # for newer Claude models).
+    bedrock_model_id: str = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    bedrock_region: str = "us-east-1"
+    # Low temperature keeps tool calls deterministic.
+    llm_temperature: float = 0.2
 
     agent_max_iterations: int = 10
     action_ttl_seconds: int = 1800

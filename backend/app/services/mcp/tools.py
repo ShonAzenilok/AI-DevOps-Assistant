@@ -18,6 +18,31 @@ AWS_CALL_TOOL_NAMES = frozenset(
     }
 )
 
+# suggest_aws_commands was removed from the managed AWS MCP Server (GA release);
+# documentation search replaced it.
+AWS_SEARCH_DOC_TOOL_NAMES = frozenset(
+    {
+        "search_documentation",
+        "aws___search_documentation",
+        "knowledge___search_documentation",
+    }
+)
+
+CLI_VERB_LABELS: dict[str, str] = {
+    "run-instances": "Create EC2 instance",
+    "terminate-instances": "Terminate EC2 instance",
+    "stop-instances": "Stop EC2 instance",
+    "start-instances": "Start EC2 instance",
+    "create-bucket": "Create S3 bucket",
+    "delete-bucket": "Delete S3 bucket",
+    "create-db-instance": "Create RDS instance",
+    "delete-db-instance": "Delete RDS instance",
+    "create-function": "Create Lambda function",
+    "delete-function": "Delete Lambda function",
+    "create-table": "Create DynamoDB table",
+    "delete-table": "Delete DynamoDB table",
+}
+
 DESTRUCTIVE_PATTERNS = re.compile(
     r"\b(delete|terminate|remove|destroy|drop|purge|deregister|release|disable|revoke)\b",
     re.IGNORECASE,
@@ -51,25 +76,94 @@ def find_aws_call_tool(tools: list[Tool]) -> Tool | None:
     return None
 
 
-def mcp_tools_to_ollama(tools: list[Tool]) -> list[dict[str, Any]]:
-    """Expose a small, focused tool set so local models reliably choose call_aws."""
+def find_search_doc_tool(tools: list[Tool]) -> Tool | None:
+    by_name = {tool.name: tool for tool in tools}
+    for name in AWS_SEARCH_DOC_TOOL_NAMES:
+        if name in by_name:
+            return by_name[name]
+    for tool in tools:
+        if "search_documentation" in tool.name.lower():
+            return tool
+    return None
+
+
+def is_call_aws_tool(tool_name: str) -> bool:
+    lowered = tool_name.lower()
+    if tool_name in AWS_CALL_TOOL_NAMES:
+        return True
+    return "call_aws" in lowered or lowered.endswith("call_aws")
+
+
+def _tool_base_name(name: str) -> str:
+    return name.lower().rsplit("___", 1)[-1]
+
+
+def resolve_tool_name(tool_name: str, tools: list[Tool]) -> str | None:
+    """Map a model-provided tool name to the actual (possibly prefixed) MCP tool name.
+
+    Small models often drop or invent the server prefix (e.g. calling
+    'search_documentation' or 'knowledge___search_documentation' when the server
+    exposes 'aws___search_documentation').
+    """
+    names = [tool.name for tool in tools]
+    if tool_name in names:
+        return tool_name
+    base = _tool_base_name(tool_name)
+    for name in names:
+        if _tool_base_name(name) == base:
+            return name
+    return None
+
+
+def build_action_summary(cli_command: str) -> tuple[str, str]:
+    """Return (label, summary) describing what the CLI command will do."""
+    parts = cli_command.split()
+    service = parts[1] if len(parts) > 1 else "aws"
+    operation = parts[2] if len(parts) > 2 else "command"
+
+    label = CLI_VERB_LABELS.get(operation)
+    if not label:
+        verb = operation.replace("-", " ")
+        if operation.startswith("create-") or operation.startswith("run-"):
+            label = f"Create {service.upper()} resource"
+        elif operation.startswith("delete-") or operation.startswith("terminate-"):
+            label = f"Delete {service.upper()} resource"
+        elif operation.startswith("update-") or operation.startswith("modify-"):
+            label = f"Update {service.upper()} resource"
+        else:
+            label = f"{service.upper()} {verb}"
+
+    summary = f"This will run `{cli_command}` against your AWS account."
+    if operation == "run-instances":
+        summary = "This will launch a new EC2 instance with the specified configuration."
+    elif operation.startswith("create-bucket"):
+        summary = "This will create a new S3 bucket."
+    elif operation.startswith("terminate-"):
+        summary = "This will permanently terminate the specified EC2 instance(s)."
+    elif operation.startswith("delete-"):
+        summary = f"This will permanently delete the specified {service.upper()} resource."
+    elif operation.startswith("create-"):
+        summary = f"This will create a new {service.upper()} resource."
+
+    return label, summary
+
+
+def mcp_tools_to_llm(tools: list[Tool]) -> list[dict[str, Any]]:
+    """Expose call_aws + search_documentation so models can look up CLI syntax."""
     selected: list[Tool] = []
     call_aws = find_aws_call_tool(tools)
     if call_aws:
         selected.append(call_aws)
-    for tool in tools:
-        if tool in selected:
-            continue
-        name = tool.name.lower()
-        if "suggest" in name and "aws" in name:
-            selected.append(tool)
+    search_doc = find_search_doc_tool(tools)
+    if search_doc and search_doc not in selected:
+        selected.append(search_doc)
     if not selected:
         selected = tools[:3]
 
-    ollama_tools: list[dict[str, Any]] = []
+    llm_tools: list[dict[str, Any]] = []
     for tool in selected:
         schema = tool.inputSchema or {"type": "object", "properties": {}}
-        ollama_tools.append(
+        llm_tools.append(
             {
                 "type": "function",
                 "function": {
@@ -79,7 +173,7 @@ def mcp_tools_to_ollama(tools: list[Tool]) -> list[dict[str, Any]]:
                 },
             }
         )
-    return ollama_tools
+    return llm_tools
 
 
 def parse_tool_call(raw: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -191,9 +285,11 @@ def is_write_tool_call(tool_name: str, arguments: dict[str, Any]) -> bool:
     return bool(cli_command and is_write_cli_command(cli_command))
 
 
-def build_action_resource(arguments: dict[str, Any]) -> dict[str, str]:
+def build_action_resource(arguments: dict[str, Any], *, summary: str | None = None) -> dict[str, str]:
     resource: dict[str, str] = {}
     cli_command = get_cli_command(arguments)
+    if summary:
+        resource["Summary"] = summary
     if cli_command:
         resource["Command"] = cli_command
 
@@ -217,6 +313,23 @@ def tool_call_label(tool_name: str, arguments: dict[str, Any]) -> tuple[str, str
 def is_recoverable_tool_error(output: str) -> bool:
     lowered = output.lower()
     return "validation_failures" in lowered or "error while validating" in lowered
+
+
+TOOL_ERROR_MARKERS = (
+    "error calling tool",
+    "error while executing the command",
+    "error while validating the command",
+    "parameter validation failed",
+    "validation_failures",
+    "an error occurred",
+    "missing required parameter",
+)
+
+
+def is_tool_error_output(output: str) -> bool:
+    """True when MCP tool output is an error message rather than a real result."""
+    lowered = output.lower()
+    return any(marker in lowered for marker in TOOL_ERROR_MARKERS)
 
 
 async def invoke_mcp_tool(

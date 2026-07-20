@@ -364,51 +364,6 @@ body {
   border-color: var(--accent);
 }
 
-.ollama-step {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  width: 100%;
-  align-items: center;
-  text-align: center;
-}
-.ollama-step h2 {
-  font-size: 21px;
-  font-weight: 600;
-  color: var(--fg);
-  margin: 0;
-  letter-spacing: -0.01em;
-}
-.ollama-step > p {
-  font-size: 13.5px;
-  color: var(--muted-50);
-  margin: 0;
-  max-width: 340px;
-}
-.ollama-checklist {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  background: var(--bg-card);
-  border: 1px solid var(--border-08);
-  border-radius: 16px;
-  padding: 20px;
-  text-align: left;
-}
-.ollama-checklist__row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.ollama-checklist__label {
-  font-size: 13.5px;
-  color: var(--fg-soft);
-}
-.ollama-checklist__label--pending {
-  color: var(--muted-35);
-}
-
 .onboarding-error {
   font-size: 13px;
   line-height: 1.5;

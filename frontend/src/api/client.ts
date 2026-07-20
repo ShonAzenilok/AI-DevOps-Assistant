@@ -76,12 +76,6 @@ export interface AwsVerifyResponse {
   accountId: string
 }
 
-export interface OllamaStatusResponse {
-  instanceRunning: boolean
-  modelReady: boolean
-  model?: string
-}
-
 export const api = {
   /** Streams one agent turn, invoking handlers as tokens and tool calls arrive.
    *  Resolves when the turn completes; rejects with ApiError on failure. */
@@ -126,9 +120,6 @@ export const api = {
   },
   verifyAws(config: AwsConfig): Promise<AwsVerifyResponse> {
     return request('/aws/verify', { method: 'POST', body: JSON.stringify(config) })
-  },
-  getOllamaStatus(): Promise<OllamaStatusResponse> {
-    return request('/ollama/status')
   },
   scanResources(): Promise<ScanResult> {
     return request('/resources/scan', { method: 'POST' })

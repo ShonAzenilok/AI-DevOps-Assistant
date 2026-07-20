@@ -13,12 +13,6 @@ class AwsVerifyResponse(BaseModel):
     accountId: str
 
 
-class OllamaStatusResponse(BaseModel):
-    instanceRunning: bool
-    modelReady: bool
-    model: str | None = None
-
-
 class ChatHistoryItem(BaseModel):
     role: Literal["user", "assistant"]
     text: str

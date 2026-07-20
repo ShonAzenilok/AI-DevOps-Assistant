@@ -1,4 +1,4 @@
-export type OnboardingStep = 'welcome' | 'aws' | 'ollama'
+export type OnboardingStep = 'welcome' | 'aws'
 export type AppPhase = OnboardingStep | 'chat'
 export type MainView = 'agent' | 'resourceMap'
 
@@ -17,7 +17,7 @@ export interface ToolCall {
 
 export type ActionStatus = 'pending' | 'executed' | 'cancelled' | 'failed'
 
-/** A staged destructive action awaiting the user's Confirm/Cancel. */
+/** A staged write/destructive action awaiting the user's Confirm/Cancel. */
 export interface PendingAction {
   id: string
   label: string

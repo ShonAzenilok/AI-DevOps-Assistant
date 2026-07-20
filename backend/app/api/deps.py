@@ -2,15 +2,15 @@ from dataclasses import dataclass
 
 from app.core.session import SessionStore
 from app.services.actions.registry import ActionRegistry
+from app.services.bedrock.client import BedrockClient
 from app.services.mcp.manager import McpClientManager
-from app.services.ollama.client import OllamaClient
 
 
 @dataclass
 class AppState:
     session_store: SessionStore
     mcp_manager: McpClientManager
-    ollama_client: OllamaClient
+    bedrock_client: BedrockClient
     action_registry: ActionRegistry
 
 

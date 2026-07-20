@@ -5,3 +5,4 @@ boto3>=1.35.0
 mcp>=1.9.0
 mcp-proxy-for-aws>=1.6.0
 httpx>=0.28.0
+awscli>=1.32

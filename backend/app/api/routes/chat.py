@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from app.api.deps import get_app_state
 from app.core.errors import credentials_required, service_unavailable
 from app.models.schemas import ChatRequest
-from app.services.ollama.agent import AgentOrchestrator
+from app.services.agent.orchestrator import AgentOrchestrator
 from app.streaming.ndjson import ndjson_response
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -20,7 +20,7 @@ async def chat(request: ChatRequest):
         raise service_unavailable("AWS MCP client is not connected. Re-verify credentials.")
 
     orchestrator = AgentOrchestrator(
-        ollama=state.ollama_client,
+        llm=state.bedrock_client,
         mcp=state.mcp_manager,
         actions=state.action_registry,
     )

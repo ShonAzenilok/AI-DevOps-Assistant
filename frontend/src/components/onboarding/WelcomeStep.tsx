@@ -13,10 +13,10 @@ export function WelcomeStep({ appName, onNext }: WelcomeStepProps) {
       </div>
       <h1>Meet {appName}</h1>
       <p>
-        A local-first AI DevOps assistant.
-        DevBot gives you complete control over your cloud environment by combining CRUD capabilities via Boto3
-        with local Terraform execution.
-        Powered entirely on your machine using Ollama and the qwen3.5:4b model.
+        A local-first AI DevOps assistant for AWS.
+        Connect your account, then chat with Claude on Amazon Bedrock to explore
+        resources and run AWS CLI actions through the managed AWS MCP Server —
+        with confirmation before anything write or destructive runs.
       </p>
       <button type="button" className="pill-button" onClick={onNext}>
         Get started

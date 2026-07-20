@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { OnboardingStep } from '../../types'
 
-const STEP_ORDER: OnboardingStep[] = ['welcome', 'aws', 'ollama']
+const STEP_ORDER: OnboardingStep[] = ['welcome', 'aws']
 
 interface OnboardingLayoutProps {
   step: OnboardingStep

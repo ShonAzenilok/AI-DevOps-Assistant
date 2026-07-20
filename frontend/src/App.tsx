@@ -5,7 +5,6 @@ import { Sidebar } from './components/Sidebar'
 import { OnboardingLayout } from './components/onboarding/OnboardingLayout'
 import { WelcomeStep } from './components/onboarding/WelcomeStep'
 import { AwsConnectStep } from './components/onboarding/AwsConnectStep'
-import { OllamaCheckStep } from './components/onboarding/OllamaCheckStep'
 import { ChatView } from './components/chat/ChatView'
 import { ResourceMapView } from './components/resourceMap/ResourceMapView'
 
@@ -165,11 +164,10 @@ export default function App() {
               onChange={setAwsConfig}
               onVerified={(verifiedAccountId) => {
                 setAccountId(verifiedAccountId)
-                setPhase('ollama')
+                setPhase('chat')
               }}
             />
           )}
-          {phase === 'ollama' && <OllamaCheckStep appName={APP_NAME} onEnter={() => setPhase('chat')} />}
         </OnboardingLayout>
       </div>
     )
