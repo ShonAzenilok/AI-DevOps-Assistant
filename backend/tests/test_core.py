@@ -68,6 +68,107 @@ def test_build_scan_result_empty() -> None:
     assert result.edges == []
     assert result.groups is not None
     assert len(result.groups) >= 2
+    kinds = {g.kind for g in result.groups}
+    assert "region" in kinds
+    assert "global" in kinds
+
+
+def test_build_scan_result_hierarchical_layout() -> None:
+    parsed = {
+        "vpc": {
+            "Vpcs": [
+                {
+                    "VpcId": "vpc-aaa",
+                    "Tags": [{"Key": "Name", "Value": "main-vpc"}],
+                }
+            ]
+        },
+        "subnet": {
+            "Subnets": [
+                {
+                    "SubnetId": "subnet-1",
+                    "VpcId": "vpc-aaa",
+                    "AvailabilityZone": "us-east-1a",
+                    "Tags": [{"Key": "Name", "Value": "public-a"}],
+                },
+                {
+                    "SubnetId": "subnet-2",
+                    "VpcId": "vpc-aaa",
+                    "AvailabilityZone": "us-east-1b",
+                    "Tags": [{"Key": "Name", "Value": "public-b"}],
+                },
+            ]
+        },
+        "ec2": {
+            "Reservations": [
+                {
+                    "Instances": [
+                        {
+                            "InstanceId": "i-111",
+                            "InstanceType": "t3.micro",
+                            "VpcId": "vpc-aaa",
+                            "SubnetId": "subnet-1",
+                            "Tags": [{"Key": "Name", "Value": "web-1"}],
+                        },
+                        {
+                            "InstanceId": "i-222",
+                            "InstanceType": "t3.small",
+                            "VpcId": "vpc-aaa",
+                            "SubnetId": "subnet-2",
+                            "Tags": [{"Key": "Name", "Value": "web-2"}],
+                        },
+                    ]
+                }
+            ]
+        },
+        "s3": {"Buckets": [{"Name": "my-bucket"}]},
+        "lambda": {
+            "Functions": [
+                {
+                    "FunctionName": "orphan-fn",
+                    "FunctionArn": "arn:aws:lambda:us-east-1:1:function:orphan-fn",
+                    "Runtime": "python3.12",
+                }
+            ]
+        },
+    }
+    result = build_scan_result("123456789012", "us-east-1", parsed)
+    assert result.groups is not None
+
+    by_id = {g.id: g for g in result.groups}
+    assert "vpc-aaa" in by_id
+    assert by_id["vpc-aaa"].parentId == "region-us-east-1"
+    assert "subnet-1" in by_id
+    assert by_id["subnet-1"].parentId == "vpc-aaa"
+    assert "subnet-2" in by_id
+    assert by_id["global"].parentId is None
+
+    nodes_by_id = {n.id: n for n in result.nodes}
+    assert nodes_by_id["i-111"].parentId == "subnet-1"
+    assert nodes_by_id["i-222"].parentId == "subnet-2"
+    assert nodes_by_id["my-bucket"].parentId == "global"
+    assert nodes_by_id["i-111"].label == "web-1"
+
+    orphan = next(n for n in result.nodes if n.type == "lambda")
+    assert orphan.parentId is not None
+    assert orphan.parentId.startswith("ungrouped-")
+
+    # No two nodes in the same parent share the same relative cell.
+    from collections import defaultdict
+
+    cells: dict[str, set[tuple[float, float]]] = defaultdict(set)
+    for node in result.nodes:
+        parent = node.parentId or ""
+        cell = (node.x, node.y)
+        assert cell not in cells[parent], f"overlap in {parent}: {cell}"
+        cells[parent].add(cell)
+
+    # Parent groups enclose child extents (relative coords).
+    vpc = by_id["vpc-aaa"]
+    for subnet_id in ("subnet-1", "subnet-2"):
+        subnet = by_id[subnet_id]
+        assert subnet.x + subnet.width <= vpc.width + 1
+        assert subnet.y + subnet.height <= vpc.height + 1
 
 
 def test_build_action_summary_run_instances() -> None:
@@ -90,6 +191,17 @@ def test_build_action_summary_terminate() -> None:
     )
     assert label == "Terminate EC2 instance"
     assert "terminate" in summary.lower()
+
+
+def test_build_action_summary_create_tags() -> None:
+    label, summary = build_action_summary(
+        "aws ec2 create-tags --resources i-0d3fda6b90f32b57a "
+        "--tags Key=Name,Value=test-ai --region us-east-1"
+    )
+    assert label == "Tag resource"
+    assert "Create EC2 resource" not in label
+    assert "tag" in summary.lower()
+    assert "create a new" not in summary.lower()
 
 
 def _tool(name: str) -> Tool:

@@ -33,6 +33,8 @@ CLI_VERB_LABELS: dict[str, str] = {
     "terminate-instances": "Terminate EC2 instance",
     "stop-instances": "Stop EC2 instance",
     "start-instances": "Start EC2 instance",
+    "create-tags": "Tag resource",
+    "delete-tags": "Remove tags",
     "create-bucket": "Create S3 bucket",
     "delete-bucket": "Delete S3 bucket",
     "create-db-instance": "Create RDS instance",
@@ -41,6 +43,30 @@ CLI_VERB_LABELS: dict[str, str] = {
     "delete-function": "Delete Lambda function",
     "create-table": "Create DynamoDB table",
     "delete-table": "Delete DynamoDB table",
+}
+
+# Ops that start with create- but do not create a new primary resource.
+CREATE_PREFIX_EXCEPTIONS: dict[str, tuple[str, str]] = {
+    "create-tags": (
+        "Tag resource",
+        "This will add or update tags on the specified resource.",
+    ),
+    "create-tags-batch": (
+        "Tag resources",
+        "This will add or update tags on the specified resources.",
+    ),
+    "create-network-interface-permission": (
+        "Grant network interface permission",
+        "This will grant a permission on an existing network interface.",
+    ),
+    "create-snapshot": (
+        "Create EBS snapshot",
+        "This will create a snapshot of the specified volume.",
+    ),
+    "create-image": (
+        "Create AMI",
+        "This will create an AMI from the specified instance.",
+    ),
 }
 
 DESTRUCTIVE_PATTERNS = re.compile(
@@ -121,6 +147,9 @@ def build_action_summary(cli_command: str) -> tuple[str, str]:
     service = parts[1] if len(parts) > 1 else "aws"
     operation = parts[2] if len(parts) > 2 else "command"
 
+    if operation in CREATE_PREFIX_EXCEPTIONS:
+        return CREATE_PREFIX_EXCEPTIONS[operation]
+
     label = CLI_VERB_LABELS.get(operation)
     if not label:
         verb = operation.replace("-", " ")
@@ -140,6 +169,8 @@ def build_action_summary(cli_command: str) -> tuple[str, str]:
         summary = "This will create a new S3 bucket."
     elif operation.startswith("terminate-"):
         summary = "This will permanently terminate the specified EC2 instance(s)."
+    elif operation.startswith("delete-tags"):
+        summary = "This will remove tags from the specified resource."
     elif operation.startswith("delete-"):
         summary = f"This will permanently delete the specified {service.upper()} resource."
     elif operation.startswith("create-"):

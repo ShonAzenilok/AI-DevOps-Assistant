@@ -72,6 +72,8 @@ class ScanNode(BaseModel):
     type: AwsResourceType
     x: float
     y: float
+    # Containing group id (subnet / vpc / region band / global). Coordinates are relative to this parent.
+    parentId: str | None = None
 
 
 class ScanEdge(BaseModel):
@@ -89,6 +91,8 @@ class ScanGroup(BaseModel):
     height: float
     color: str | None = None
     kind: GroupKind | None = None
+    # Parent group id for nesting (vpc under region, subnet under vpc).
+    parentId: str | None = None
 
 
 class ScanResult(BaseModel):

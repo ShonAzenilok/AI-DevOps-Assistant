@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Background, BackgroundVariant, Handle, Position, ReactFlow } from '@xyflow/react'
 import type { Edge, Node, NodeProps } from '@xyflow/react'
-import type { AwsResourceType, GroupKind, ScanResult } from '../../types'
+import type { AwsResourceType, GroupKind, ScanGroup, ScanResult } from '../../types'
 import { ResourceIcon } from '../icons'
 
 type AwsNodeData = {
@@ -33,8 +33,6 @@ function AwsNode({ data }: NodeProps<AwsFlowNode>) {
   )
 }
 
-// AWS architecture-diagram container conventions (documentation style):
-// dashed teal region, solid purple VPC, solid neutral AWS-cloud/global box.
 const GROUP_FALLBACK_COLORS: Record<string, string> = {
   region: '#00A4A6',
   vpc: '#8C4FFF',
@@ -67,9 +65,7 @@ function BadgeGlyph({ kind }: { kind: GroupKind | undefined }) {
           <path d="M3 12h18" stroke="currentColor" strokeWidth="1.6" />
         </svg>
       )
-    
     default:
-      // AWS Cloud / global
       return (
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
           <path
@@ -86,14 +82,9 @@ function BadgeGlyph({ kind }: { kind: GroupKind | undefined }) {
 function AwsGroup({ data }: NodeProps<AwsGroupNode>) {
   const kind = data.kind
   const color = data.color || GROUP_FALLBACK_COLORS[kind ?? 'vpc'] || '#8a8f98'
-  // dark glyph on light badges, light glyph on saturated badges
   const glyphColor = kind === 'global' ? '#16191f' : '#ffffff'
   return (
-    <div
-      className="aws-group"
-      // region / VPC / subnet are dotted containers; the AWS Cloud box is solid
-      style={{ borderColor: color, borderStyle: 'dotted' }}
-    >
+    <div className="aws-group" style={{ borderColor: color, borderStyle: 'dotted' }}>
       <div className="aws-group__header">
         <span className="aws-group__badge" style={{ background: color, color: glyphColor }}>
           <BadgeGlyph kind={kind} />
@@ -111,24 +102,37 @@ const KNOWN_TYPES: AwsResourceType[] = [
   'elb', 'ebs', 'dynamodb', 'ecr', 'apigateway', 'amplify', 'route53',
 ]
 
-// Containment tells the story in AWS reference diagrams — no edges drawn.
 const GROUP_Z: Record<string, number> = { region: -3, vpc: -2, subnet: -1, global: -2 }
 
+function flowGroupId(id: string): string {
+  return `group-${id}`
+}
+
+/** Parent groups before children so React Flow nesting resolves correctly. */
+function sortGroupsForNesting(groups: ScanGroup[]): ScanGroup[] {
+  const kindOrder: Record<string, number> = { region: 0, global: 0, vpc: 1, subnet: 2 }
+  return [...groups].sort(
+    (a, b) => (kindOrder[a.kind ?? 'vpc'] ?? 9) - (kindOrder[b.kind ?? 'vpc'] ?? 9),
+  )
+}
+
 function toFlow(data: ScanResult): { nodes: Node[]; edges: Edge[] } {
-  const groupNodes: Node[] = (data.groups ?? []).map((g) => ({
-    id: `group-${g.id}`,
+  const groups = sortGroupsForNesting(data.groups ?? [])
+
+  const groupNodes: Node[] = groups.map((g) => ({
+    id: flowGroupId(g.id),
     type: 'awsGroup',
     position: { x: g.x, y: g.y },
     data: { label: g.label, color: g.color ?? '', kind: g.kind },
     style: { width: g.width, height: g.height },
-    // stacking: region under vpc under subnet, all under resource nodes
     zIndex: GROUP_Z[g.kind ?? 'vpc'] ?? -1,
     selectable: false,
     draggable: false,
+    ...(g.parentId
+      ? { parentId: flowGroupId(g.parentId), extent: 'parent' as const }
+      : {}),
   }))
 
-  // Real AWS diagrams show the VPC as a container outline, not a node —
-  // drop VPC node cards from the canvas.
   const resourceNodes: Node[] = data.nodes
     .filter((n) => n.type !== 'vpc')
     .map((n) => ({
@@ -140,6 +144,11 @@ function toFlow(data: ScanResult): { nodes: Node[]; edges: Edge[] } {
         sublabel: n.sublabel,
         resourceType: KNOWN_TYPES.includes(n.type) ? n.type : 'vpc',
       },
+      selectable: false,
+      draggable: false,
+      ...(n.parentId
+        ? { parentId: flowGroupId(n.parentId), extent: 'parent' as const }
+        : {}),
     }))
 
   return { nodes: [...groupNodes, ...resourceNodes], edges: [] }
@@ -150,8 +159,6 @@ interface ResourceFlowProps {
   onRescan: () => void
 }
 
-// Stable identity per scan result so the (uncontrolled, read-only) canvas
-// remounts only when a new scan produces new data.
 let nextFlowId = 0
 const flowIds = new WeakMap<ScanResult, number>()
 function flowIdFor(data: ScanResult): number {

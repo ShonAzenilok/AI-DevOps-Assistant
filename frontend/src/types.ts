@@ -61,6 +61,8 @@ export interface ScanNode {
   type: AwsResourceType
   x: number
   y: number
+  /** Containing group id; x/y are relative to that parent. */
+  parentId?: string | null
 }
 
 export interface ScanEdge {
@@ -78,6 +80,8 @@ export interface ScanGroup {
   height: number
   color?: string
   kind?: GroupKind
+  /** Parent group id for nesting (vpc under region, subnet under vpc). */
+  parentId?: string | null
 }
 
 export interface ScanResult {

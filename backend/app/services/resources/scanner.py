@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.models.schemas import ScanGroup, ScanNode, ScanResult, StoredAwsCredentials
@@ -16,6 +17,10 @@ NODE_H = 72
 GAP_X = 24
 GAP_Y = 24
 GROUP_PAD = 40
+HEADER_H = 36
+COLS = 3
+MIN_GROUP_W = 220
+MIN_GROUP_H = 120
 
 
 def _parse_json_output(raw: str) -> Any:
@@ -52,6 +57,66 @@ def _extract_list(payload: Any, *keys: str) -> list[Any]:
     return []
 
 
+def _tag_name(item: dict[str, Any]) -> str | None:
+    tags = item.get("Tags") or item.get("TagList") or []
+    if not isinstance(tags, list):
+        return None
+    for tag in tags:
+        if isinstance(tag, dict) and tag.get("Key") == "Name" and tag.get("Value"):
+            return str(tag["Value"])
+    return None
+
+
+@dataclass
+class _PendingNode:
+    id: str
+    label: str
+    sublabel: str
+    type: str
+    parent_id: str
+
+
+@dataclass
+class _LayoutCursor:
+    index: int = 0
+    max_col: int = 0
+    max_row: int = 0
+
+    def next_cell(self) -> tuple[float, float]:
+        col = self.index % COLS
+        row = self.index // COLS
+        self.index += 1
+        self.max_col = max(self.max_col, col)
+        self.max_row = max(self.max_row, row)
+        x = GROUP_PAD + col * (NODE_W + GAP_X)
+        y = GROUP_PAD + HEADER_H + row * (NODE_H + GAP_Y)
+        return x, y
+
+    def content_size(self) -> tuple[float, float]:
+        if self.index == 0:
+            return MIN_GROUP_W, MIN_GROUP_H
+        cols = min(COLS, self.index)
+        rows = (self.index + COLS - 1) // COLS
+        width = GROUP_PAD * 2 + cols * NODE_W + max(0, cols - 1) * GAP_X
+        height = GROUP_PAD + HEADER_H + rows * NODE_H + max(0, rows - 1) * GAP_Y + GROUP_PAD
+        return max(width, MIN_GROUP_W), max(height, MIN_GROUP_H)
+
+
+@dataclass
+class _GroupBox:
+    id: str
+    label: str
+    kind: str
+    color: str
+    parent_id: str | None = None
+    x: float = 0
+    y: float = 0
+    width: float = MIN_GROUP_W
+    height: float = MIN_GROUP_H
+    cursor: _LayoutCursor = field(default_factory=_LayoutCursor)
+    child_group_ids: list[str] = field(default_factory=list)
+
+
 class ResourceScanner:
     def __init__(self, mcp: McpClientManager) -> None:
         self.mcp = mcp
@@ -62,6 +127,7 @@ class ResourceScanner:
 
         commands = {
             "vpc": f"aws ec2 describe-vpcs --region {region}",
+            "subnet": f"aws ec2 describe-subnets --region {region}",
             "ec2": f"aws ec2 describe-instances --region {region}",
             "s3": "aws s3api list-buckets",
             "rds": f"aws rds describe-db-instances --region {region}",
@@ -91,180 +157,404 @@ class ResourceScanner:
 
 
 def build_scan_result(account_id: str, region: str, parsed: dict[str, Any]) -> ScanResult:
-    groups: list[ScanGroup] = []
-    nodes: list[ScanNode] = []
+    region_id = f"region-{region}"
+    ungrouped_id = f"ungrouped-{region}"
+    global_id = "global"
 
-    region_group = ScanGroup(
-        id=f"region-{region}",
-        label=region,
-        x=40,
-        y=40,
-        width=900,
-        height=700,
-        color="#00A4A6",
-        kind="region",
-    )
-    groups.append(region_group)
+    boxes: dict[str, _GroupBox] = {
+        region_id: _GroupBox(
+            id=region_id,
+            label=region,
+            kind="region",
+            color="#00A4A6",
+        ),
+        global_id: _GroupBox(
+            id=global_id,
+            label="Global",
+            kind="global",
+            color="#E9EBED",
+        ),
+    }
 
     vpcs = _extract_list(parsed.get("vpc"), "Vpcs")
-    vpc_groups: dict[str, ScanGroup] = {}
     for index, vpc in enumerate(vpcs):
-        vpc_id = vpc.get("VpcId", f"vpc-{index}")
-        group = ScanGroup(
+        if not isinstance(vpc, dict):
+            continue
+        vpc_id = str(vpc.get("VpcId") or f"vpc-{index}")
+        name = _tag_name(vpc)
+        boxes[vpc_id] = _GroupBox(
             id=vpc_id,
-            label=vpc_id,
-            x=80 + (index % 2) * 420,
-            y=80 + (index // 2) * 320,
-            width=380,
-            height=260,
-            color="#8C4FFF",
+            label=name or vpc_id,
             kind="vpc",
+            color="#8C4FFF",
+            parent_id=region_id,
         )
-        vpc_groups[vpc_id] = group
-        groups.append(group)
+        boxes[region_id].child_group_ids.append(vpc_id)
 
-    global_group = ScanGroup(
-        id="global",
-        label="Global",
-        x=980,
-        y=40,
-        width=320,
-        height=420,
-        color="#E9EBED",
-        kind="global",
-    )
-    groups.append(global_group)
+    subnets = _extract_list(parsed.get("subnet"), "Subnets")
+    for index, subnet in enumerate(subnets):
+        if not isinstance(subnet, dict):
+            continue
+        subnet_id = str(subnet.get("SubnetId") or f"subnet-{index}")
+        vpc_id = str(subnet.get("VpcId") or "")
+        if vpc_id not in boxes:
+            continue
+        name = _tag_name(subnet)
+        az = subnet.get("AvailabilityZone") or ""
+        label = name or (f"{subnet_id} ({az})" if az else subnet_id)
+        boxes[subnet_id] = _GroupBox(
+            id=subnet_id,
+            label=str(label)[:48],
+            kind="subnet",
+            color="#7AA116",
+            parent_id=vpc_id,
+        )
+        boxes[vpc_id].child_group_ids.append(subnet_id)
 
-    def add_nodes(
+    pending: list[_PendingNode] = []
+
+    def enqueue(
         resource_type: str,
-        items: list[dict[str, Any]],
-        *,
-        global_scope: bool = False,
-        label_key: str = "Name",
-        sublabel_fn: Any = None,
-        id_fn: Any = None,
+        node_id: str,
+        label: str,
+        sublabel: str,
+        parent_id: str,
     ) -> None:
-        parent = global_group if global_scope else region_group
-        base_x = parent.x + GROUP_PAD
-        base_y = parent.y + GROUP_PAD
-        for index, item in enumerate(items):
-            node_id = id_fn(item) if id_fn else item.get("id") or f"{resource_type}-{index}"
-            label = item.get(label_key) or node_id
-            sublabel = sublabel_fn(item) if sublabel_fn else resource_type.upper()
-            col = index % 3
-            row = index // 3
-            nodes.append(
-                ScanNode(
-                    id=str(node_id),
-                    label=str(label)[:40],
-                    sublabel=str(sublabel)[:40],
-                    type=resource_type,  # type: ignore[arg-type]
-                    x=base_x + col * (NODE_W + GAP_X),
-                    y=base_y + row * (NODE_H + GAP_Y),
-                )
+        if not node_id:
+            return
+        pending.append(
+            _PendingNode(
+                id=str(node_id),
+                label=str(label)[:40],
+                sublabel=str(sublabel)[:40],
+                type=resource_type,
+                parent_id=parent_id,
+            )
+        )
+
+    def ensure_ungrouped() -> None:
+        if ungrouped_id in boxes:
+            return
+        boxes[ungrouped_id] = _GroupBox(
+            id=ungrouped_id,
+            label="Regional services",
+            kind="vpc",
+            color="#5A5A5A",
+            parent_id=region_id,
+        )
+        boxes[region_id].child_group_ids.append(ungrouped_id)
+
+    def resolve_vpc_parent(vpc_id: str | None) -> str:
+        if vpc_id and vpc_id in boxes and boxes[vpc_id].kind == "vpc":
+            return vpc_id
+        ensure_ungrouped()
+        return ungrouped_id
+
+    def resolve_subnet_parent(subnet_id: str | None, vpc_id: str | None) -> str:
+        if subnet_id and subnet_id in boxes and boxes[subnet_id].kind == "subnet":
+            return subnet_id
+        return resolve_vpc_parent(vpc_id)
+
+    # --- EC2 ---
+    instances: list[dict[str, Any]] = []
+    for reservation in _extract_list(parsed.get("ec2"), "Reservations"):
+        if isinstance(reservation, dict):
+            instances.extend(
+                i for i in _extract_list(reservation, "Instances") if isinstance(i, dict)
             )
 
-    instances = []
-    for reservation in _extract_list(parsed.get("ec2"), "Reservations"):
-        instances.extend(_extract_list(reservation, "Instances"))
+    for inst in instances:
+        instance_id = str(inst.get("InstanceId") or "")
+        name = _tag_name(inst) or instance_id
+        enqueue(
+            "ec2",
+            instance_id,
+            name,
+            str(inst.get("InstanceType") or "EC2"),
+            resolve_subnet_parent(inst.get("SubnetId"), inst.get("VpcId")),
+        )
 
-    add_nodes(
-        "ec2",
-        instances,
-        label_key="InstanceId",
-        sublabel_fn=lambda i: i.get("InstanceType", "EC2"),
-        id_fn=lambda i: i.get("InstanceId"),
+    # --- EBS ---
+    for volume in _extract_list(parsed.get("ebs"), "Volumes"):
+        if not isinstance(volume, dict):
+            continue
+        volume_id = str(volume.get("VolumeId") or "")
+        attachments = _extract_list(volume, "Attachments")
+        parent = ungrouped_id
+        if attachments and isinstance(attachments[0], dict):
+            attached_instance = attachments[0].get("InstanceId")
+            matching = next((i for i in instances if i.get("InstanceId") == attached_instance), None)
+            if matching:
+                parent = resolve_subnet_parent(matching.get("SubnetId"), matching.get("VpcId"))
+            else:
+                ensure_ungrouped()
+                parent = ungrouped_id
+        else:
+            ensure_ungrouped()
+            parent = ungrouped_id
+        enqueue(
+            "ebs",
+            volume_id,
+            volume_id,
+            str(volume.get("State") or "EBS"),
+            parent,
+        )
+
+    # --- RDS ---
+    for db in _extract_list(parsed.get("rds"), "DBInstances"):
+        if not isinstance(db, dict):
+            continue
+        vpc_id = None
+        subnet_id = None
+        subnet_group = db.get("DBSubnetGroup")
+        if isinstance(subnet_group, dict):
+            vpc_id = subnet_group.get("VpcId")
+            subnets_in_group = _extract_list(subnet_group, "Subnets")
+            if subnets_in_group and isinstance(subnets_in_group[0], dict):
+                subnet_id = subnets_in_group[0].get("SubnetIdentifier")
+        enqueue(
+            "rds",
+            str(db.get("DBInstanceIdentifier") or ""),
+            str(db.get("DBInstanceIdentifier") or ""),
+            str(db.get("Engine") or "RDS"),
+            resolve_subnet_parent(subnet_id, vpc_id),
+        )
+
+    # --- Lambda ---
+    for fn in _extract_list(parsed.get("lambda"), "Functions"):
+        if not isinstance(fn, dict):
+            continue
+        vpc_config = fn.get("VpcConfig") if isinstance(fn.get("VpcConfig"), dict) else {}
+        vpc_id = vpc_config.get("VpcId") if vpc_config else None
+        subnet_ids = vpc_config.get("SubnetIds") if vpc_config else None
+        subnet_id = subnet_ids[0] if isinstance(subnet_ids, list) and subnet_ids else None
+        enqueue(
+            "lambda",
+            str(fn.get("FunctionArn") or fn.get("FunctionName") or ""),
+            str(fn.get("FunctionName") or ""),
+            str(fn.get("Runtime") or "Lambda"),
+            resolve_subnet_parent(subnet_id, vpc_id) if vpc_id else resolve_vpc_parent(None),
+        )
+
+    # --- ELB ---
+    for lb in _extract_list(parsed.get("elb"), "LoadBalancers"):
+        if not isinstance(lb, dict):
+            continue
+        azs = _extract_list(lb, "AvailabilityZones")
+        subnet_id = None
+        if azs and isinstance(azs[0], dict):
+            subnet_id = azs[0].get("SubnetId")
+        enqueue(
+            "elb",
+            str(lb.get("LoadBalancerArn") or lb.get("LoadBalancerName") or ""),
+            str(lb.get("LoadBalancerName") or ""),
+            str(lb.get("Type") or "ELB"),
+            resolve_subnet_parent(subnet_id, lb.get("VpcId")),
+        )
+
+    # --- Regional non-VPC services ---
+    for name in _extract_list(parsed.get("dynamodb"), "TableNames"):
+        ensure_ungrouped()
+        enqueue("dynamodb", str(name), str(name), "DynamoDB", ungrouped_id)
+
+    for repo in _extract_list(parsed.get("ecr"), "repositories"):
+        if not isinstance(repo, dict):
+            continue
+        ensure_ungrouped()
+        enqueue(
+            "ecr",
+            str(repo.get("repositoryArn") or repo.get("repositoryName") or ""),
+            str(repo.get("repositoryName") or ""),
+            "ECR",
+            ungrouped_id,
+        )
+
+    for api in _extract_list(parsed.get("apigateway"), "items"):
+        if not isinstance(api, dict):
+            continue
+        ensure_ungrouped()
+        enqueue(
+            "apigateway",
+            str(api.get("id") or api.get("name") or ""),
+            str(api.get("name") or api.get("id") or ""),
+            "API Gateway",
+            ungrouped_id,
+        )
+
+    for app in _extract_list(parsed.get("amplify"), "apps"):
+        if not isinstance(app, dict):
+            continue
+        ensure_ungrouped()
+        enqueue(
+            "amplify",
+            str(app.get("appId") or app.get("name") or ""),
+            str(app.get("name") or ""),
+            str(app.get("platform") or "Amplify"),
+            ungrouped_id,
+        )
+
+    for alarm in _extract_list(parsed.get("cloudwatch"), "MetricAlarms"):
+        if not isinstance(alarm, dict):
+            continue
+        ensure_ungrouped()
+        enqueue(
+            "cloudwatch",
+            str(alarm.get("AlarmArn") or alarm.get("AlarmName") or ""),
+            str(alarm.get("AlarmName") or ""),
+            str(alarm.get("StateValue") or "Alarm"),
+            ungrouped_id,
+        )
+
+    # --- Global ---
+    for bucket in _extract_list(parsed.get("s3"), "Buckets"):
+        if not isinstance(bucket, dict):
+            continue
+        enqueue(
+            "s3",
+            str(bucket.get("Name") or ""),
+            str(bucket.get("Name") or ""),
+            "S3 bucket",
+            global_id,
+        )
+
+    for zone in _extract_list(parsed.get("route53"), "HostedZones"):
+        if not isinstance(zone, dict):
+            continue
+        enqueue(
+            "route53",
+            str(zone.get("Id") or zone.get("Name") or ""),
+            str(zone.get("Name") or ""),
+            f"{zone.get('ResourceRecordSetCount', 0)} records",
+            global_id,
+        )
+
+    # Drop empty VPC/subnet groups that received no pending nodes and have no children with nodes.
+    parents_used = {p.parent_id for p in pending}
+
+    def group_has_content(group_id: str) -> bool:
+        if group_id in parents_used:
+            return True
+        box = boxes.get(group_id)
+        if not box:
+            return False
+        return any(group_has_content(cid) for cid in box.child_group_ids)
+
+    # Keep region + global always; prune empty vpc/subnet/ungrouped
+    for gid in list(boxes.keys()):
+        if boxes[gid].kind in {"region", "global"}:
+            continue
+        if not group_has_content(gid):
+            parent = boxes[gid].parent_id
+            if parent and parent in boxes and gid in boxes[parent].child_group_ids:
+                boxes[parent].child_group_ids.remove(gid)
+            del boxes[gid]
+
+    # Place nodes with per-parent shared cursor (relative coords)
+    scan_nodes: list[ScanNode] = []
+    for item in pending:
+        if item.parent_id not in boxes:
+            continue
+        box = boxes[item.parent_id]
+        x, y = box.cursor.next_cell()
+        scan_nodes.append(
+            ScanNode(
+                id=item.id,
+                label=item.label,
+                sublabel=item.sublabel,
+                type=item.type,  # type: ignore[arg-type]
+                x=x,
+                y=y,
+                parentId=item.parent_id,
+            )
+        )
+
+    # Size leaf groups from cursors, then nest upward
+    def size_from_cursor(box: _GroupBox) -> None:
+        box.width, box.height = box.cursor.content_size()
+
+    def layout_children_of(parent: _GroupBox) -> None:
+        child_ids = [cid for cid in parent.child_group_ids if cid in boxes]
+        if not child_ids:
+            size_from_cursor(parent)
+            # If parent also has direct nodes, cursor already sized; expand for children if any
+            return
+
+        # First size each child fully
+        for cid in child_ids:
+            child = boxes[cid]
+            layout_children_of(child)
+
+        # Place child groups in a vertical stack under the header
+        y = GROUP_PAD + HEADER_H
+        max_w = MIN_GROUP_W
+        for cid in child_ids:
+            child = boxes[cid]
+            child.x = GROUP_PAD
+            child.y = y
+            y += child.height + GAP_Y
+            max_w = max(max_w, child.width)
+
+        # Also account for nodes placed directly on this parent
+        node_w, node_h = parent.cursor.content_size()
+        if parent.cursor.index > 0:
+            # Nodes sit above child groups when both exist: shift children down
+            # Simpler approach: put direct nodes in a band then children below.
+            # Re-place children below the node band.
+            band_h = node_h if parent.cursor.index else GROUP_PAD + HEADER_H
+            y = band_h + GAP_Y
+            for cid in child_ids:
+                child = boxes[cid]
+                child.x = GROUP_PAD
+                child.y = y
+                y += child.height + GAP_Y
+                max_w = max(max_w, child.width)
+            parent.width = max(max_w + GROUP_PAD * 2, node_w)
+            parent.height = y + GROUP_PAD
+        else:
+            parent.width = max_w + GROUP_PAD * 2
+            parent.height = y + GROUP_PAD
+
+    # Size subnets (leaves with nodes), then VPCs, then region
+    for box in boxes.values():
+        if box.kind == "subnet":
+            size_from_cursor(box)
+
+    for box in boxes.values():
+        if box.kind == "vpc":
+            layout_children_of(box)
+
+    region_box = boxes[region_id]
+    layout_children_of(region_box)
+
+    global_box = boxes[global_id]
+    size_from_cursor(global_box)
+
+    # Absolute positions for top-level groups only (region + global)
+    region_box.x = 40
+    region_box.y = 40
+    global_box.x = region_box.x + region_box.width + 48
+    global_box.y = 40
+
+    scan_groups: list[ScanGroup] = []
+    for box in boxes.values():
+        scan_groups.append(
+            ScanGroup(
+                id=box.id,
+                label=box.label,
+                x=box.x,
+                y=box.y,
+                width=box.width,
+                height=box.height,
+                color=box.color,
+                kind=box.kind,  # type: ignore[arg-type]
+                parentId=box.parent_id,
+            )
+        )
+
+    return ScanResult(
+        accountId=account_id,
+        region=region,
+        nodes=scan_nodes,
+        edges=[],
+        groups=scan_groups,
     )
-
-    buckets = _extract_list(parsed.get("s3"), "Buckets")
-    add_nodes(
-        "s3",
-        buckets,
-        global_scope=True,
-        label_key="Name",
-        sublabel_fn=lambda b: "S3 bucket",
-        id_fn=lambda b: b.get("Name"),
-    )
-
-    add_nodes(
-        "rds",
-        _extract_list(parsed.get("rds"), "DBInstances"),
-        label_key="DBInstanceIdentifier",
-        sublabel_fn=lambda d: d.get("Engine", "RDS"),
-        id_fn=lambda d: d.get("DBInstanceIdentifier"),
-    )
-
-    add_nodes(
-        "lambda",
-        _extract_list(parsed.get("lambda"), "Functions"),
-        label_key="FunctionName",
-        sublabel_fn=lambda f: f.get("Runtime", "Lambda"),
-        id_fn=lambda f: f.get("FunctionArn") or f.get("FunctionName"),
-    )
-
-    add_nodes(
-        "elb",
-        _extract_list(parsed.get("elb"), "LoadBalancers"),
-        label_key="LoadBalancerName",
-        sublabel_fn=lambda lb: lb.get("Type", "ELB"),
-        id_fn=lambda lb: lb.get("LoadBalancerArn") or lb.get("LoadBalancerName"),
-    )
-
-    add_nodes(
-        "ebs",
-        _extract_list(parsed.get("ebs"), "Volumes"),
-        label_key="VolumeId",
-        sublabel_fn=lambda v: v.get("State", "EBS"),
-        id_fn=lambda v: v.get("VolumeId"),
-    )
-
-    add_nodes(
-        "dynamodb",
-        [{"Name": name} for name in _extract_list(parsed.get("dynamodb"), "TableNames")],
-        label_key="Name",
-        sublabel_fn=lambda _: "DynamoDB",
-        id_fn=lambda t: t.get("Name"),
-    )
-
-    add_nodes(
-        "ecr",
-        _extract_list(parsed.get("ecr"), "repositories"),
-        label_key="repositoryName",
-        sublabel_fn=lambda r: "ECR",
-        id_fn=lambda r: r.get("repositoryArn") or r.get("repositoryName"),
-    )
-
-    add_nodes(
-        "apigateway",
-        _extract_list(parsed.get("apigateway"), "items"),
-        label_key="name",
-        sublabel_fn=lambda a: "API Gateway",
-        id_fn=lambda a: a.get("id") or a.get("name"),
-    )
-
-    add_nodes(
-        "amplify",
-        _extract_list(parsed.get("amplify"), "apps"),
-        label_key="name",
-        sublabel_fn=lambda a: a.get("platform", "Amplify"),
-        id_fn=lambda a: a.get("appId") or a.get("name"),
-    )
-
-    add_nodes(
-        "route53",
-        _extract_list(parsed.get("route53"), "HostedZones"),
-        global_scope=True,
-        label_key="Name",
-        sublabel_fn=lambda z: f"{z.get('ResourceRecordSetCount', 0)} records",
-        id_fn=lambda z: z.get("Id"),
-    )
-
-    add_nodes(
-        "cloudwatch",
-        _extract_list(parsed.get("cloudwatch"), "MetricAlarms"),
-        label_key="AlarmName",
-        sublabel_fn=lambda a: a.get("StateValue", "Alarm"),
-        id_fn=lambda a: a.get("AlarmArn") or a.get("AlarmName"),
-    )
-
-    return ScanResult(accountId=account_id, region=region, nodes=nodes, edges=[], groups=groups)

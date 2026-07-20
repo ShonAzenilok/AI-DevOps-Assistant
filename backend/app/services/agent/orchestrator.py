@@ -46,8 +46,9 @@ Examples of read-only commands:
 Use only parameter names that appear in AWS CLI documentation or in tool error messages.
 If a command is rejected, copy the corrected parameters exactly from the error.
 
-Write/destructive operations are staged for user confirmation before they run.
-After tool results arrive, summarize them clearly for the user in plain language.
+Write/destructive operations are staged for user confirmation in the UI (Confirm / Cancel).
+Never ask the user to reply yes/no — the confirmation card is the only approval path.
+After read tool results arrive, summarize them clearly for the user in plain language.
 """
 
 MAX_VALIDATION_RETRIES = 3
@@ -230,22 +231,21 @@ class AgentOrchestrator:
                     pending: PendingAction = self.actions.stage(staged)
                     emitted_text = True
                     yield ndjson_line({"type": "confirm", "action": pending.model_dump(mode="json")})
+                    # Hard stop: Confirm/Cancel on the card is the only approval path.
+                    # Do not continue the loop or let the model ask yes/no in chat.
+                    return
+
+                tool, output = await invoke_mcp_tool(self.mcp.session, tool_name, arguments)
+                tool_outputs.append(output)
+                emitted_text = True
+                yield ndjson_line({"type": "tool", "tool": tool.model_dump(mode="json")})
+                if is_recoverable_tool_error(output):
                     tool_output = (
-                        f"Staged for user confirmation: {action_label}. "
-                        "Do not retry until the user confirms or cancels."
+                        f"{output}\n\nThe AWS CLI command was invalid. "
+                        "Correct the parameters using the error above and call call_aws again."
                     )
                 else:
-                    tool, output = await invoke_mcp_tool(self.mcp.session, tool_name, arguments)
-                    tool_outputs.append(output)
-                    emitted_text = True
-                    yield ndjson_line({"type": "tool", "tool": tool.model_dump(mode="json")})
-                    if is_recoverable_tool_error(output):
-                        tool_output = (
-                            f"{output}\n\nThe AWS CLI command was invalid. "
-                            "Correct the parameters using the error above and call call_aws again."
-                        )
-                    else:
-                        tool_output = output or "Tool completed successfully."
+                    tool_output = output or "Tool completed successfully."
 
                 messages.append(
                     {

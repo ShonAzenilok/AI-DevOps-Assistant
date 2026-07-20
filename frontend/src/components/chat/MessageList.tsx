@@ -132,6 +132,9 @@ export function MessageList({ appName, messages, isThinking, onResolveAction }: 
             <div className="user-bubble">{m.text}</div>
           ) : (
             <div className="assistant-message">
+              <div className={`assistant-message__text${m.isError ? ' assistant-message__text--error' : ''}`}>
+                {m.isError ? m.text : <MarkdownText text={m.text} />}
+              </div>
               {m.tools && m.tools.length > 0 && <ToolCard tools={m.tools} />}
               {m.actions?.map((a) => (
                 <ActionCard
@@ -140,9 +143,6 @@ export function MessageList({ appName, messages, isThinking, onResolveAction }: 
                   onResolve={(actionId, verb) => onResolveAction(m.id, actionId, verb)}
                 />
               ))}
-              <div className={`assistant-message__text${m.isError ? ' assistant-message__text--error' : ''}`}>
-                {m.isError ? m.text : <MarkdownText text={m.text} />}
-              </div>
             </div>
           )}
         </div>
