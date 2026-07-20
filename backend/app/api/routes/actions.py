@@ -1,0 +1,26 @@
+from fastapi import APIRouter
+
+from app.api.deps import get_app_state
+from app.core.errors import credentials_required, service_unavailable
+from app.models.schemas import ActionResultResponse
+
+router = APIRouter(prefix="/actions", tags=["actions"])
+
+
+@router.post("/{action_id}/confirm", response_model=ActionResultResponse)
+async def confirm_action(action_id: str) -> ActionResultResponse:
+    state = get_app_state()
+    if state.session_store.credentials is None:
+        raise credentials_required()
+    if not state.mcp_manager.is_connected:
+        raise service_unavailable("AWS MCP client is not connected. Re-verify credentials.")
+
+    return await state.action_registry.confirm(action_id, state.mcp_manager.session)
+
+
+@router.post("/{action_id}/cancel", response_model=ActionResultResponse)
+async def cancel_action(action_id: str) -> ActionResultResponse:
+    state = get_app_state()
+    if state.session_store.credentials is None:
+        raise credentials_required()
+    return state.action_registry.cancel(action_id)

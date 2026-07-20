@@ -1,0 +1,24 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    host: str = "127.0.0.1"
+    port: int = 8000
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    aws_mcp_endpoint: str = "https://aws-mcp.us-east-1.api.aws/mcp"
+    # SigV4 service name for the managed AWS MCP Server (inferred from endpoint hostname).
+    aws_mcp_service: str = "aws-mcp"
+    aws_mcp_region: str = "us-east-1"
+
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen3.5:4b"
+    ollama_timeout: float = 120.0
+
+    agent_max_iterations: int = 10
+    action_ttl_seconds: int = 1800
+
+
+settings = Settings()
