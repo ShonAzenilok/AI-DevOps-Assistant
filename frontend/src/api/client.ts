@@ -1,6 +1,16 @@
-import type { ActionStatus, AwsConfig, PendingAction, ScanResult, ToolCall } from '../types'
+import type {
+  ActionResultResponse,
+  AwsConfig,
+  AwsVerifyResponse,
+  ChatHistoryItem,
+  PendingAction,
+  ScanResult,
+  ToolCall,
+} from '../types'
 
 const API_BASE = '/api'
+
+export type { ActionResultResponse, AwsVerifyResponse, ChatHistoryItem }
 
 export class ApiError extends Error {
   readonly status: number | null
@@ -47,11 +57,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export interface ChatHistoryItem {
-  role: 'user' | 'assistant'
-  text: string
-}
-
 export interface ChatStreamHandlers {
   onToken: (text: string) => void
   onTool: (tool: ToolCall) => void
@@ -65,16 +70,6 @@ type ChatStreamEvent =
   | { type: 'confirm'; action: PendingAction }
   | { type: 'error'; detail: string }
   | { type: 'done' }
-
-export interface ActionResultResponse {
-  status: ActionStatus
-  summary?: string | null
-  output?: string | null
-}
-
-export interface AwsVerifyResponse {
-  accountId: string
-}
 
 export const api = {
   /** Streams one agent turn, invoking handlers as tokens and tool calls arrive.

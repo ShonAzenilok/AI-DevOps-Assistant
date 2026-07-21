@@ -16,6 +16,7 @@ from typing import Any
 
 from app.models.schemas import ActionResultResponse, StagedMcpCall
 from app.services.aws_cli.validator import cli_validator
+from app.services.mcp.helpers import parse_cli_head, truncate_output
 from app.services.mcp.manager import McpClientManager
 from app.services.mcp.tools import (
     get_cli_command,
@@ -40,10 +41,7 @@ Rules:
 
 
 def _operation_key(cli_command: str) -> tuple[str, str]:
-    parts = cli_command.split()
-    service = parts[1] if len(parts) > 1 else ""
-    operation = parts[2] if len(parts) > 2 else ""
-    return service, operation
+    return parse_cli_head(cli_command)
 
 
 def _call_aws_tool_schema(tool_name: str) -> list[dict[str, Any]]:
@@ -118,10 +116,12 @@ async def execute_with_retry(
         _, output = await invoke_mcp_tool(mcp.session, call.tool_name, arguments)
         if is_tool_error_output(output):
             return ActionResultResponse(
-                status="failed", summary=call.label, output=output[:8000]
+                status="failed", summary=call.label, output=truncate_output(output)
             )
         return ActionResultResponse(
-            status="executed", summary=f"Completed — {call.label}", output=output[:8000]
+            status="executed",
+            summary=f"Completed — {call.label}",
+            output=truncate_output(output),
         )
 
     approved_op = _operation_key(approved_command)
@@ -139,10 +139,17 @@ async def execute_with_retry(
             if attempt > 1:
                 summary += f" (corrected after {attempt - 1} failed attempt{'s' if attempt > 2 else ''})"
                 output = f"Executed command: {command}\n\n{output}"
-            return ActionResultResponse(status="executed", summary=summary, output=output[:8000])
+            return ActionResultResponse(
+                status="executed", summary=summary, output=truncate_output(output)
+            )
 
         attempt_log.append(f"Attempt {attempt}: {command}\n{output}")
-        logger.warning("Confirmed action failed (attempt %d/%d): %s", attempt, MAX_EXECUTION_ATTEMPTS, output[:300])
+        logger.warning(
+            "Confirmed action failed (attempt %d/%d): %s",
+            attempt,
+            MAX_EXECUTION_ATTEMPTS,
+            output[:300],
+        )
 
         if attempt == MAX_EXECUTION_ATTEMPTS:
             break
@@ -172,5 +179,5 @@ async def execute_with_retry(
     return ActionResultResponse(
         status="failed",
         summary=f"{call.label} (after {attempts_made} attempt{'s' if attempts_made != 1 else ''})",
-        output="\n\n".join(attempt_log)[:8000],
+        output=truncate_output("\n\n".join(attempt_log)),
     )

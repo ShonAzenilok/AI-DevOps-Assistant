@@ -113,7 +113,3 @@ class McpClientManager:
 
         result = await self.session.call_tool(tool.name, arguments=arguments)
         return extract_tool_output(result)
-
-    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
-        result = await self.session.call_tool(tool_name, arguments=arguments)
-        return extract_tool_output(result)

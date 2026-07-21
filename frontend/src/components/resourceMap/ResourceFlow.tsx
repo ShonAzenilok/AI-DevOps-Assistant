@@ -81,6 +81,7 @@ function BadgeGlyph({ kind }: { kind: GroupKind | undefined }) {
 
 function AwsGroup({ data }: NodeProps<AwsGroupNode>) {
   const kind = data.kind
+  // Prefer backend-provided color; fallback palette is secondary only.
   const color = data.color || GROUP_FALLBACK_COLORS[kind ?? 'vpc'] || '#8a8f98'
   const glyphColor = kind === 'global' ? '#16191f' : '#ffffff'
   return (
@@ -123,7 +124,7 @@ function toFlow(data: ScanResult): { nodes: Node[]; edges: Edge[] } {
     id: flowGroupId(g.id),
     type: 'awsGroup',
     position: { x: g.x, y: g.y },
-    data: { label: g.label, color: g.color ?? '', kind: g.kind },
+    data: { label: g.label, color: g.color || GROUP_FALLBACK_COLORS[g.kind ?? 'vpc'] || '#8a8f98', kind: g.kind },
     style: { width: g.width, height: g.height },
     zIndex: GROUP_Z[g.kind ?? 'vpc'] ?? -1,
     selectable: false,

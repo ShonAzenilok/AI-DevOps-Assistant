@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from typing import Any
 
 from mcp import ClientSession
 from mcp.types import Tool
 
 from app.models.schemas import ToolCall
+from app.services.mcp.helpers import parse_cli_head, parse_tool_arguments, truncate_output
 
 AWS_CALL_TOOL_NAMES = frozenset(
     {
@@ -28,25 +30,25 @@ AWS_SEARCH_DOC_TOOL_NAMES = frozenset(
     }
 )
 
-CLI_VERB_LABELS: dict[str, str] = {
-    "run-instances": "Create EC2 instance",
-    "terminate-instances": "Terminate EC2 instance",
-    "stop-instances": "Stop EC2 instance",
-    "start-instances": "Start EC2 instance",
-    "create-tags": "Tag resource",
-    "delete-tags": "Remove tags",
-    "create-bucket": "Create S3 bucket",
-    "delete-bucket": "Delete S3 bucket",
-    "create-db-instance": "Create RDS instance",
-    "delete-db-instance": "Delete RDS instance",
-    "create-function": "Create Lambda function",
-    "delete-function": "Delete Lambda function",
-    "create-table": "Create DynamoDB table",
-    "delete-table": "Delete DynamoDB table",
-}
-
-# Ops that start with create- but do not create a new primary resource.
-CREATE_PREFIX_EXCEPTIONS: dict[str, tuple[str, str]] = {
+# Exact (label, summary) for known CLI operations. create-* exceptions that are not
+# "create a new primary resource" live here alongside ordinary verb labels.
+OPERATION_COPY: dict[str, tuple[str, str]] = {
+    "run-instances": (
+        "Create EC2 instance",
+        "This will launch a new EC2 instance with the specified configuration.",
+    ),
+    "terminate-instances": (
+        "Terminate EC2 instance",
+        "This will permanently terminate the specified EC2 instance(s).",
+    ),
+    "stop-instances": (
+        "Stop EC2 instance",
+        "This will run `{cli}` against your AWS account.",
+    ),
+    "start-instances": (
+        "Start EC2 instance",
+        "This will run `{cli}` against your AWS account.",
+    ),
     "create-tags": (
         "Tag resource",
         "This will add or update tags on the specified resource.",
@@ -66,6 +68,42 @@ CREATE_PREFIX_EXCEPTIONS: dict[str, tuple[str, str]] = {
     "create-image": (
         "Create AMI",
         "This will create an AMI from the specified instance.",
+    ),
+    "delete-tags": (
+        "Remove tags",
+        "This will remove tags from the specified resource.",
+    ),
+    "create-bucket": (
+        "Create S3 bucket",
+        "This will create a new S3 bucket.",
+    ),
+    "delete-bucket": (
+        "Delete S3 bucket",
+        "This will permanently delete the specified S3API resource.",
+    ),
+    "create-db-instance": (
+        "Create RDS instance",
+        "This will create a new RDS resource.",
+    ),
+    "delete-db-instance": (
+        "Delete RDS instance",
+        "This will permanently delete the specified RDS resource.",
+    ),
+    "create-function": (
+        "Create Lambda function",
+        "This will create a new LAMBDA resource.",
+    ),
+    "delete-function": (
+        "Delete Lambda function",
+        "This will permanently delete the specified LAMBDA resource.",
+    ),
+    "create-table": (
+        "Create DynamoDB table",
+        "This will create a new DYNAMODB resource.",
+    ),
+    "delete-table": (
+        "Delete DynamoDB table",
+        "This will permanently delete the specified DYNAMODB resource.",
     ),
 }
 
@@ -90,34 +128,35 @@ READ_QUERY_PATTERNS = re.compile(
 )
 
 
-def find_aws_call_tool(tools: list[Tool]) -> Tool | None:
+def _find_tool_by_names(
+    tools: list[Tool],
+    exact: frozenset[str],
+    substring_pred: Callable[[str], bool],
+) -> Tool | None:
     by_name = {tool.name: tool for tool in tools}
-    for name in AWS_CALL_TOOL_NAMES:
+    for name in exact:
         if name in by_name:
             return by_name[name]
     for tool in tools:
-        lowered = tool.name.lower()
-        if "call_aws" in lowered or lowered.endswith("call_aws"):
+        if substring_pred(tool.name.lower()):
             return tool
     return None
+
+
+def find_aws_call_tool(tools: list[Tool]) -> Tool | None:
+    return _find_tool_by_names(
+        tools,
+        AWS_CALL_TOOL_NAMES,
+        lambda lowered: "call_aws" in lowered or lowered.endswith("call_aws"),
+    )
 
 
 def find_search_doc_tool(tools: list[Tool]) -> Tool | None:
-    by_name = {tool.name: tool for tool in tools}
-    for name in AWS_SEARCH_DOC_TOOL_NAMES:
-        if name in by_name:
-            return by_name[name]
-    for tool in tools:
-        if "search_documentation" in tool.name.lower():
-            return tool
-    return None
-
-
-def is_call_aws_tool(tool_name: str) -> bool:
-    lowered = tool_name.lower()
-    if tool_name in AWS_CALL_TOOL_NAMES:
-        return True
-    return "call_aws" in lowered or lowered.endswith("call_aws")
+    return _find_tool_by_names(
+        tools,
+        AWS_SEARCH_DOC_TOOL_NAMES,
+        lambda lowered: "search_documentation" in lowered,
+    )
 
 
 def _tool_base_name(name: str) -> str:
@@ -143,29 +182,24 @@ def resolve_tool_name(tool_name: str, tools: list[Tool]) -> str | None:
 
 def build_action_summary(cli_command: str) -> tuple[str, str]:
     """Return (label, summary) describing what the CLI command will do."""
-    parts = cli_command.split()
-    service = parts[1] if len(parts) > 1 else "aws"
-    operation = parts[2] if len(parts) > 2 else "command"
+    service, operation = parse_cli_head(cli_command)
+    default_summary = f"This will run `{cli_command}` against your AWS account."
 
-    if operation in CREATE_PREFIX_EXCEPTIONS:
-        return CREATE_PREFIX_EXCEPTIONS[operation]
+    if operation in OPERATION_COPY:
+        label, summary = OPERATION_COPY[operation]
+        return label, summary.format(cli=cli_command) if "{cli}" in summary else summary
 
-    label = CLI_VERB_LABELS.get(operation)
-    if not label:
-        verb = operation.replace("-", " ")
-        if operation.startswith("create-") or operation.startswith("run-"):
-            label = f"Create {service.upper()} resource"
-        elif operation.startswith("delete-") or operation.startswith("terminate-"):
-            label = f"Delete {service.upper()} resource"
-        elif operation.startswith("update-") or operation.startswith("modify-"):
-            label = f"Update {service.upper()} resource"
-        else:
-            label = f"{service.upper()} {verb}"
+    verb = operation.replace("-", " ")
+    if operation.startswith("create-") or operation.startswith("run-"):
+        label = f"Create {service.upper()} resource"
+    elif operation.startswith("delete-") or operation.startswith("terminate-"):
+        label = f"Delete {service.upper()} resource"
+    elif operation.startswith("update-") or operation.startswith("modify-"):
+        label = f"Update {service.upper()} resource"
+    else:
+        label = f"{service.upper()} {verb}"
 
-    summary = f"This will run `{cli_command}` against your AWS account."
-    if operation == "run-instances":
-        summary = "This will launch a new EC2 instance with the specified configuration."
-    elif operation.startswith("create-bucket"):
+    if operation.startswith("create-bucket"):
         summary = "This will create a new S3 bucket."
     elif operation.startswith("terminate-"):
         summary = "This will permanently terminate the specified EC2 instance(s)."
@@ -175,12 +209,14 @@ def build_action_summary(cli_command: str) -> tuple[str, str]:
         summary = f"This will permanently delete the specified {service.upper()} resource."
     elif operation.startswith("create-"):
         summary = f"This will create a new {service.upper()} resource."
+    else:
+        summary = default_summary
 
     return label, summary
 
 
 def mcp_tools_to_llm(tools: list[Tool]) -> list[dict[str, Any]]:
-    """Expose call_aws + search_documentation so models can look up CLI syntax."""
+    """Map MCP tools to LLM function-tool specs (call_aws + search_documentation)."""
     selected: list[Tool] = []
     call_aws = find_aws_call_tool(tools)
     if call_aws:
@@ -211,18 +247,7 @@ def parse_tool_call(raw: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     fn = raw.get("function") or {}
     tool_name = fn.get("name") or raw.get("name", "")
     raw_args = fn.get("arguments") if fn else raw.get("arguments")
-    if raw_args is None:
-        arguments: dict[str, Any] = {}
-    elif isinstance(raw_args, str):
-        try:
-            arguments = json.loads(raw_args)
-        except json.JSONDecodeError:
-            arguments = {"cli_command": raw_args}
-    elif isinstance(raw_args, dict):
-        arguments = raw_args
-    else:
-        arguments = {}
-    return tool_name, arguments
+    return tool_name, parse_tool_arguments(raw_args)
 
 
 def get_cli_command(arguments: dict[str, Any]) -> str | None:
@@ -240,7 +265,7 @@ def set_cli_command(arguments: dict[str, Any], cli_command: str) -> None:
 
 
 def sanitize_cli_command(cli_command: str) -> str:
-    """Fix common invalid AWS CLI patterns produced by small local models."""
+    """Fix common invalid AWS CLI patterns produced by the LLM."""
     normalized = " ".join(cli_command.split())
     if "run-instances" in normalized:
         normalized = re.sub(r"\s--tags\b", " --tag-specifications", normalized)
@@ -376,5 +401,10 @@ async def invoke_mcp_tool(
     except Exception as exc:
         output = str(exc)
     duration_ms = int((time.perf_counter() - started) * 1000)
-    tool = ToolCall(label=label, detail=detail, durationMs=duration_ms, output=output[:8000] or None)
+    tool = ToolCall(
+        label=label,
+        detail=detail,
+        durationMs=duration_ms,
+        output=truncate_output(output) or None,
+    )
     return tool, output

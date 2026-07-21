@@ -70,6 +70,7 @@ class CliValidator:
             return self._service_table
 
     def validate(self, cli_command: str) -> CliValidationResult:
+        """Check service/operation/params against awscli tables; never raises."""
         try:
             return self._validate(cli_command)
         except Exception as exc:

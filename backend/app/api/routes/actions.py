@@ -2,8 +2,7 @@ import logging
 
 from fastapi import APIRouter
 
-from app.api.deps import get_app_state
-from app.core.errors import credentials_required, service_unavailable
+from app.api.deps import require_aws_session
 from app.models.schemas import ActionResultResponse
 from app.services.actions.executor import execute_with_retry
 
@@ -13,12 +12,7 @@ router = APIRouter(prefix="/actions", tags=["actions"])
 
 @router.post("/{action_id}/confirm", response_model=ActionResultResponse)
 async def confirm_action(action_id: str) -> ActionResultResponse:
-    state = get_app_state()
-    if state.session_store.credentials is None:
-        raise credentials_required()
-    if not state.mcp_manager.is_connected:
-        raise service_unavailable("AWS MCP client is not connected. Re-verify credentials.")
-
+    state = require_aws_session()
     call = state.action_registry.take(action_id)
     if call is None:
         return ActionResultResponse(status="failed", summary="Action not found or expired.")
@@ -32,7 +26,5 @@ async def confirm_action(action_id: str) -> ActionResultResponse:
 
 @router.post("/{action_id}/cancel", response_model=ActionResultResponse)
 async def cancel_action(action_id: str) -> ActionResultResponse:
-    state = get_app_state()
-    if state.session_store.credentials is None:
-        raise credentials_required()
+    state = require_aws_session(require_mcp=False)
     return state.action_registry.cancel(action_id)

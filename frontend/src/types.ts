@@ -8,6 +8,10 @@ export interface AwsConfig {
   region: string
 }
 
+export interface AwsVerifyResponse {
+  accountId: string
+}
+
 export interface ToolCall {
   label: string
   detail: string
@@ -16,6 +20,12 @@ export interface ToolCall {
 }
 
 export type ActionStatus = 'pending' | 'executed' | 'cancelled' | 'failed'
+
+export interface ActionResultResponse {
+  status: ActionStatus
+  summary?: string | null
+  output?: string | null
+}
 
 /** A staged write/destructive action awaiting the user's Confirm/Cancel. */
 export interface PendingAction {
@@ -35,6 +45,11 @@ export interface ChatMessage {
   tools?: ToolCall[]
   actions?: PendingAction[]
   isError?: boolean
+}
+
+export interface ChatHistoryItem {
+  role: 'user' | 'assistant'
+  text: string
 }
 
 export type AwsResourceType =
@@ -78,6 +93,7 @@ export interface ScanGroup {
   y: number
   width: number
   height: number
+  /** Backend-provided accent; FE fallback is secondary only. */
   color?: string
   kind?: GroupKind
   /** Parent group id for nesting (vpc under region, subnet under vpc). */

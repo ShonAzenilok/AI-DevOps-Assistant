@@ -7,8 +7,9 @@ from typing import Any
 from app.config import settings
 from app.models.schemas import ChatHistoryItem, PendingAction, StagedMcpCall
 from app.services.actions.registry import ActionRegistry
-from app.services.aws_cli.validator import cli_validator
+from app.services.aws_cli.validator import CliValidationResult, cli_validator
 from app.services.bedrock.client import BedrockClient
+from app.services.mcp.helpers import truncate_output
 from app.services.mcp.manager import McpClientManager
 from app.services.mcp.tools import (
     build_action_resource,
@@ -63,6 +64,37 @@ def _summarize_tool_output(outputs: list[str]) -> str:
     return joined
 
 
+def _tool_ndjson(label: str, detail: str, output: str) -> str:
+    return ndjson_line(
+        {
+            "type": "tool",
+            "tool": {
+                "label": label,
+                "detail": detail,
+                "output": truncate_output(output),
+            },
+        }
+    )
+
+
+def _append_tool_message(messages: list[dict[str, Any]], tool_name: str, content: str) -> None:
+    messages.append({"role": "tool", "content": content, "name": tool_name})
+
+
+def _validation_error_output(validation: CliValidationResult) -> str:
+    params_hint = ""
+    if validation.valid_params:
+        params_hint = (
+            " Valid parameters for this operation: "
+            + ", ".join(validation.valid_params)
+            + "."
+        )
+    return (
+        f"Invalid AWS CLI: {validation.error}{params_hint} "
+        "Correct the command and call call_aws again."
+    )
+
+
 class AgentOrchestrator:
     def __init__(
         self,
@@ -93,6 +125,7 @@ class AgentOrchestrator:
         message: str,
         history: list[ChatHistoryItem],
     ) -> AsyncIterator[str]:
+        """Drive one ReAct turn: stream LLM, validate/stage/invoke tools, hard-stop on confirm."""
         llm_tools = mcp_tools_to_llm(self.mcp.tools)
         region = self.mcp.user_region or "us-east-1"
         messages: list[dict[str, Any]] = [
@@ -142,118 +175,22 @@ class AgentOrchestrator:
             )
 
             for tool_call in tool_calls:
-                tool_name, arguments = parse_tool_call(tool_call)
-
-                # Models sometimes drop server prefixes (search_documentation vs
-                # aws___search_documentation) or invent tool names entirely.
-                resolved = resolve_tool_name(tool_name, self.mcp.tools)
-                if resolved is None:
-                    available = ", ".join(t.name for t in self.mcp.tools)
-                    tool_output = (
-                        f"Unknown tool '{tool_name}'. Available tools: {available}. "
-                        "Use call_aws to run AWS CLI commands."
-                    )
-                    emitted_text = True
-                    yield ndjson_line(
-                        {
-                            "type": "tool",
-                            "tool": {
-                                "label": "Unknown tool",
-                                "detail": tool_name,
-                                "output": tool_output,
-                            },
-                        }
-                    )
-                    messages.append({"role": "tool", "content": tool_output, "name": tool_name})
-                    continue
-                tool_name = resolved
-
-                cli_command = get_cli_command(arguments)
-                if isinstance(cli_command, str):
-                    corrected = coerce_read_only_command(message, region, cli_command)
-                    corrected = self.mcp.ensure_cli_region(corrected)
-                    set_cli_command(arguments, corrected)
-                    cli_command = get_cli_command(arguments)
-
-                if cli_command is not None:
-                    validation = cli_validator.validate(cli_command)
-                    if not validation.ok:
-                        validation_failures += 1
-                        params_hint = ""
-                        if validation.valid_params:
-                            params_hint = (
-                                " Valid parameters for this operation: "
-                                + ", ".join(validation.valid_params)
-                                + "."
-                            )
-                        tool_output = (
-                            f"Invalid AWS CLI: {validation.error}{params_hint} "
-                            "Correct the command and call call_aws again."
-                        )
-                        emitted_text = True
-                        yield ndjson_line(
-                            {
-                                "type": "tool",
-                                "tool": {
-                                    "label": "Invalid command",
-                                    "detail": cli_command,
-                                    "output": tool_output[:8000],
-                                },
-                            }
-                        )
-                        if validation_failures >= MAX_VALIDATION_RETRIES:
-                            yield ndjson_line(
-                                {
-                                    "type": "token",
-                                    "text": "\n\nI couldn't produce a valid AWS CLI command for "
-                                    "this request after several attempts. Try rephrasing with "
-                                    "more specifics (service, resource, and parameters).",
-                                }
-                            )
-                            return
-                        messages.append(
-                            {"role": "tool", "content": tool_output, "name": tool_name}
-                        )
-                        continue
-
-                if cli_command is not None and (
-                    is_destructive_tool_call(tool_name, arguments)
-                    or is_write_tool_call(tool_name, arguments)
-                ):
-                    action_label, action_summary = build_action_summary(cli_command)
-                    staged = StagedMcpCall(
-                        tool_name=tool_name,
-                        arguments=arguments,
-                        label=action_label,
-                        detail=action_summary,
-                        resource=build_action_resource(arguments, summary=action_summary),
-                    )
-                    pending: PendingAction = self.actions.stage(staged)
-                    emitted_text = True
-                    yield ndjson_line({"type": "confirm", "action": pending.model_dump(mode="json")})
-                    # Hard stop: Confirm/Cancel on the card is the only approval path.
-                    # Do not continue the loop or let the model ask yes/no in chat.
-                    return
-
-                tool, output = await invoke_mcp_tool(self.mcp.session, tool_name, arguments)
-                tool_outputs.append(output)
-                emitted_text = True
-                yield ndjson_line({"type": "tool", "tool": tool.model_dump(mode="json")})
-                if is_recoverable_tool_error(output):
-                    tool_output = (
-                        f"{output}\n\nThe AWS CLI command was invalid. "
-                        "Correct the parameters using the error above and call call_aws again."
-                    )
-                else:
-                    tool_output = output or "Tool completed successfully."
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "content": tool_output,
-                        "name": tool_name,
-                    }
+                result = await self._handle_tool_call(
+                    tool_call,
+                    message=message,
+                    region=region,
+                    messages=messages,
+                    tool_outputs=tool_outputs,
+                    validation_failures=validation_failures,
                 )
+                validation_failures = result.validation_failures
+                for line in result.lines:
+                    yield line
+                    emitted_text = True
+                if result.hard_stop:
+                    return
+                if result.give_up:
+                    return
 
         if not emitted_text and tool_outputs:
             yield ndjson_line({"type": "token", "text": _summarize_tool_output(tool_outputs)})
@@ -265,3 +202,114 @@ class AgentOrchestrator:
                     "Try a narrower request or continue in a follow-up message.",
                 }
             )
+
+    async def _handle_tool_call(
+        self,
+        tool_call: dict[str, Any],
+        *,
+        message: str,
+        region: str,
+        messages: list[dict[str, Any]],
+        tool_outputs: list[str],
+        validation_failures: int,
+    ) -> _ToolHandleResult:
+        """Validate, stage write, or invoke one tool call; preserve hard-stop-after-confirm."""
+        lines: list[str] = []
+        tool_name, arguments = parse_tool_call(tool_call)
+
+        # Models sometimes drop server prefixes (search_documentation vs
+        # aws___search_documentation) or invent tool names entirely.
+        resolved = resolve_tool_name(tool_name, self.mcp.tools)
+        if resolved is None:
+            available = ", ".join(t.name for t in self.mcp.tools)
+            tool_output = (
+                f"Unknown tool '{tool_name}'. Available tools: {available}. "
+                "Use call_aws to run AWS CLI commands."
+            )
+            lines.append(_tool_ndjson("Unknown tool", tool_name, tool_output))
+            _append_tool_message(messages, tool_name, tool_output)
+            return _ToolHandleResult(lines=lines, validation_failures=validation_failures)
+
+        tool_name = resolved
+
+        cli_command = get_cli_command(arguments)
+        if isinstance(cli_command, str):
+            corrected = coerce_read_only_command(message, region, cli_command)
+            corrected = self.mcp.ensure_cli_region(corrected)
+            set_cli_command(arguments, corrected)
+            cli_command = get_cli_command(arguments)
+
+        if cli_command is not None:
+            validation = cli_validator.validate(cli_command)
+            if not validation.ok:
+                validation_failures += 1
+                tool_output = _validation_error_output(validation)
+                lines.append(_tool_ndjson("Invalid command", cli_command, tool_output))
+                if validation_failures >= MAX_VALIDATION_RETRIES:
+                    lines.append(
+                        ndjson_line(
+                            {
+                                "type": "token",
+                                "text": "\n\nI couldn't produce a valid AWS CLI command for "
+                                "this request after several attempts. Try rephrasing with "
+                                "more specifics (service, resource, and parameters).",
+                            }
+                        )
+                    )
+                    return _ToolHandleResult(
+                        lines=lines,
+                        validation_failures=validation_failures,
+                        give_up=True,
+                    )
+                _append_tool_message(messages, tool_name, tool_output)
+                return _ToolHandleResult(lines=lines, validation_failures=validation_failures)
+
+        if cli_command is not None and (
+            is_destructive_tool_call(tool_name, arguments) or is_write_tool_call(tool_name, arguments)
+        ):
+            action_label, action_summary = build_action_summary(cli_command)
+            staged = StagedMcpCall(
+                tool_name=tool_name,
+                arguments=arguments,
+                label=action_label,
+                detail=action_summary,
+                resource=build_action_resource(arguments, summary=action_summary),
+            )
+            pending: PendingAction = self.actions.stage(staged)
+            lines.append(ndjson_line({"type": "confirm", "action": pending.model_dump(mode="json")}))
+            # Hard stop: Confirm/Cancel on the card is the only approval path.
+            return _ToolHandleResult(
+                lines=lines,
+                validation_failures=validation_failures,
+                hard_stop=True,
+            )
+
+        tool, output = await invoke_mcp_tool(self.mcp.session, tool_name, arguments)
+        tool_outputs.append(output)
+        lines.append(ndjson_line({"type": "tool", "tool": tool.model_dump(mode="json")}))
+        if is_recoverable_tool_error(output):
+            tool_output = (
+                f"{output}\n\nThe AWS CLI command was invalid. "
+                "Correct the parameters using the error above and call call_aws again."
+            )
+        else:
+            tool_output = output or "Tool completed successfully."
+        _append_tool_message(messages, tool_name, tool_output)
+        return _ToolHandleResult(lines=lines, validation_failures=validation_failures)
+
+
+class _ToolHandleResult:
+    __slots__ = ("lines", "validation_failures", "hard_stop", "give_up")
+
+    def __init__(
+        self,
+        *,
+        lines: list[str],
+        validation_failures: int,
+        hard_stop: bool = False,
+        give_up: bool = False,
+    ) -> None:
+        self.lines = lines
+        self.validation_failures = validation_failures
+        self.hard_stop = hard_stop
+        self.give_up = give_up

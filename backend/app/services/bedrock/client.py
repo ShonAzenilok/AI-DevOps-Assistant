@@ -7,7 +7,6 @@ Exposes chat_stream / chat_once for the agent orchestrator and action executor.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -18,6 +17,7 @@ import boto3
 
 from app.config import settings
 from app.core.session import SessionStore
+from app.services.mcp.helpers import parse_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +47,7 @@ def tools_to_bedrock(tools: list[dict[str, Any]]) -> dict[str, Any]:
 def messages_to_bedrock(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Convert chat messages to Bedrock Converse (messages, system).
-
-    Handles the role="tool" results by pairing them, in order, with the toolUse
-    ids of the preceding assistant message. Consecutive same-role messages are
-    merged because Converse requires strictly alternating user/assistant roles.
-    """
+    """Translate chat messages into Bedrock Converse messages + system blocks."""
     system: list[dict[str, str]] = []
     converted: list[dict[str, Any]] = []
     pending_tool_ids: list[str] = []
@@ -97,12 +92,7 @@ def messages_to_bedrock(
             pending_tool_ids = []
             for call in tool_calls:
                 fn = call.get("function") or {}
-                arguments = fn.get("arguments")
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except json.JSONDecodeError:
-                        arguments = {"cli_command": arguments}
+                arguments = parse_tool_arguments(fn.get("arguments"))
                 call_id = call.get("id") or str(uuid.uuid4())
                 pending_tool_ids.append(call_id)
                 blocks.append(
@@ -201,6 +191,7 @@ class BedrockClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
+        """Stream Converse events, yielding token deltas and a final tool_calls message."""
         kwargs = self._base_kwargs(messages, tools)
         client = self._runtime_client()
         queue: Queue[Any] = Queue()
@@ -253,10 +244,7 @@ class BedrockClient:
 
             elif "contentBlockStop" in event:
                 if current_tool is not None:
-                    try:
-                        arguments = json.loads(current_tool_json) if current_tool_json else {}
-                    except json.JSONDecodeError:
-                        arguments = {"cli_command": current_tool_json}
+                    arguments = parse_tool_arguments(current_tool_json or None)
                     tool_calls.append(
                         {
                             "id": current_tool["id"],

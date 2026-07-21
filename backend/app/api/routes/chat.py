@@ -2,8 +2,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter
 
-from app.api.deps import get_app_state
-from app.core.errors import credentials_required, service_unavailable
+from app.api.deps import require_aws_session
 from app.models.schemas import ChatRequest
 from app.services.agent.orchestrator import AgentOrchestrator
 from app.streaming.ndjson import ndjson_response
@@ -13,12 +12,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 @router.post("")
 async def chat(request: ChatRequest):
-    state = get_app_state()
-    if state.session_store.credentials is None:
-        raise credentials_required()
-    if not state.mcp_manager.is_connected:
-        raise service_unavailable("AWS MCP client is not connected. Re-verify credentials.")
-
+    state = require_aws_session()
     orchestrator = AgentOrchestrator(
         llm=state.bedrock_client,
         mcp=state.mcp_manager,
