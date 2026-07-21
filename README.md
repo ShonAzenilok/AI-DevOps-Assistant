@@ -14,8 +14,8 @@ React (Vite)  →  FastAPI  →  Amazon Bedrock + AWS MCP Server
 ## Features
 
 - **Onboarding** — enter Access Key / Secret / region; STS verifies the account and connects the managed AWS MCP Server
-- **Chat agent** — Bedrock drives a ReAct loop; tools are MCP `call_aws` and documentation search
-- **Safe writes** — create / update / delete commands are staged until you click Confirm (no chat yes/no)
+- **Chat agent** — Bedrock drives a ReAct loop; tools are MCP `call_aws` and documentation search.
+- **Safe writes** — create / update / delete commands are staged until you click Confirm.
 - **CLI validation** — invalid commands are caught locally against `awscli` tables before they hit AWS
 - **Resource map** — hierarchical region → VPC → subnet view of common AWS resources
 
