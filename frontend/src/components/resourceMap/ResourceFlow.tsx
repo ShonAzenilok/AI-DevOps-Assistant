@@ -99,7 +99,7 @@ function AwsGroup({ data }: NodeProps<AwsGroupNode>) {
 const nodeTypes = { aws: AwsNode, awsGroup: AwsGroup }
 
 const KNOWN_TYPES: AwsResourceType[] = [
-  'vpc', 'ec2', 's3', 'rds', 'lambda', 'cloudwatch',
+  'vpc', 'ec2', 's3', 'rds', 'lambda',
   'elb', 'ebs', 'dynamodb', 'ecr', 'apigateway', 'amplify', 'route53',
 ]
 

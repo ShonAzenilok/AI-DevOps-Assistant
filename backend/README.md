@@ -67,6 +67,8 @@ Optional tuning:
 | `POST` | `/api/resources/scan` | Scan AWS account topology for resource map |
 | `POST` | `/api/actions/{id}/confirm` | Execute staged write/destructive action |
 | `POST` | `/api/actions/{id}/cancel` | Cancel staged action |
+| `POST` | `/api/debug/check-logs` | Fetch CloudWatch logs, find errors, suggest hello-world fix (NDJSON) |
+| `POST` | `/api/debug/chat` | Debugging chat with local `read_file` / `search_code` (NDJSON) |
 | `GET` | `/health` | Health check |
 
 ## Architecture

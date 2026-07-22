@@ -159,16 +159,6 @@ def _fields_amplify(item: Any) -> tuple[str, str, str] | None:
     )
 
 
-def _fields_cloudwatch(item: Any) -> tuple[str, str, str] | None:
-    if not isinstance(item, dict):
-        return None
-    return (
-        str(item.get("AlarmArn") or item.get("AlarmName") or ""),
-        str(item.get("AlarmName") or ""),
-        str(item.get("StateValue") or "Alarm"),
-    )
-
-
 def _fields_s3(item: Any) -> tuple[str, str, str] | None:
     if not isinstance(item, dict):
         return None
@@ -191,7 +181,6 @@ _SIMPLE_ENQUEUE: list[tuple[str, str, tuple[str, ...], str, _SimpleFields]] = [
     ("ecr", "ecr", ("repositories",), "ungrouped", _fields_ecr),
     ("apigateway", "apigateway", ("items",), "ungrouped", _fields_apigateway),
     ("amplify", "amplify", ("apps",), "ungrouped", _fields_amplify),
-    ("cloudwatch", "cloudwatch", ("MetricAlarms",), "ungrouped", _fields_cloudwatch),
     ("s3", "s3", ("Buckets",), "global", _fields_s3),
     ("route53", "route53", ("HostedZones",), "global", _fields_route53),
 ]
@@ -219,7 +208,6 @@ class ResourceScanner:
             "apigateway": f"aws apigateway get-rest-apis --region {region}",
             "amplify": f"aws amplify list-apps --region {region}",
             "route53": "aws route53 list-hosted-zones",
-            "cloudwatch": f"aws cloudwatch describe-alarms --region {region}",
         }
 
         async def run_scan(resource_type: str, cli_command: str) -> tuple[str, Any]:

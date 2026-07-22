@@ -54,6 +54,27 @@ export function NewChatIcon() {
   )
 }
 
+export function DebuggingIcon() {
+  return (
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+      <ellipse cx="12" cy="13" rx="5.2" ry="6.2" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M12 6.8V4.5M9.2 5.2L8 3.8M14.8 5.2L16 3.8"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path d="M12 7.5v11.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path
+        d="M6.8 10.2H4.5M6.8 13.5H4.2M6.8 16.8H4.5M17.2 10.2H19.5M17.2 13.5H19.8M17.2 16.8H19.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 export function SendIcon() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none">

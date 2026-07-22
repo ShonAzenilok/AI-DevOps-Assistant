@@ -1,5 +1,5 @@
 import type { MainView } from '../types'
-import { AgentModeIcon, LogoIcon, NewChatIcon, ResourceMapIcon } from './icons'
+import { AgentModeIcon, DebuggingIcon, LogoIcon, NewChatIcon, ResourceMapIcon } from './icons'
 
 interface SidebarProps {
   view: MainView
@@ -31,6 +31,14 @@ export function Sidebar({ view, onSelect, onNewChat }: SidebarProps) {
         onClick={() => onSelect('agent')}
       >
         <AgentModeIcon />
+      </button>
+      <button
+        type="button"
+        title="Debugging"
+        className={`rail-button${view === 'debugging' ? ' active' : ''}`}
+        onClick={() => onSelect('debugging')}
+      >
+        <DebuggingIcon />
       </button>
     </div>
   )

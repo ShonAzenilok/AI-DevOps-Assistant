@@ -1,11 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import type { AppPhase, AwsConfig, ChatMessage, MainView, PendingAction, ScanState } from './types'
 import { api, ApiError } from './api/client'
+import type { ChatStreamHandlers } from './api/client'
 import { Sidebar } from './components/Sidebar'
 import { OnboardingLayout } from './components/onboarding/OnboardingLayout'
 import { WelcomeStep } from './components/onboarding/WelcomeStep'
 import { AwsConnectStep } from './components/onboarding/AwsConnectStep'
 import { ChatView } from './components/chat/ChatView'
+import { DebuggingChatView } from './components/debugging/DebuggingChatView'
 import { ResourceMapView } from './components/resourceMap/ResourceMapView'
 
 const APP_NAME = 'DevBot'
@@ -30,10 +32,13 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [isThinking, setIsThinking] = useState(false)
   const [scan, setScan] = useState<ScanState>({ status: 'idle' })
-  // Bumped on "new chat" — used to remount the chat (clearing the composer's
-  // local input) and to discard any reply from a request started earlier.
   const [chatSession, setChatSession] = useState(0)
   const chatSessionRef = useRef(0)
+
+  const [debugMessages, setDebugMessages] = useState<ChatMessage[]>([])
+  const [debugIsThinking, setDebugIsThinking] = useState(false)
+  const [debugSession, setDebugSession] = useState(0)
+  const debugSessionRef = useRef(0)
 
   const sendMessage = useCallback(
     async (raw: string) => {
@@ -46,8 +51,6 @@ export default function App() {
       setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'user', text }])
       setIsThinking(true)
 
-      // The assistant message is created by the first streamed event and grown
-      // in place as more arrive, so the answer appears as the model writes it.
       const assistantId = crypto.randomUUID()
       const upsertAssistant = (update: (m: ChatMessage) => ChatMessage) => {
         if (chatSessionRef.current !== session) return
@@ -98,8 +101,88 @@ export default function App() {
     [isThinking, messages],
   )
 
-  // Confirm or cancel a staged destructive action: call the backend, then
-  // reflect the outcome (executed/failed/cancelled + result) on the card.
+  const runDebugStream = useCallback(
+    async (opts: {
+      userText: string
+      stream: (handlers: ChatStreamHandlers) => Promise<void>
+    }) => {
+      if (debugIsThinking) return
+      const session = debugSessionRef.current
+      setDebugMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'user', text: opts.userText },
+      ])
+      setDebugIsThinking(true)
+
+      const assistantId = crypto.randomUUID()
+      const upsertAssistant = (update: (m: ChatMessage) => ChatMessage) => {
+        if (debugSessionRef.current !== session) return
+        setDebugIsThinking(false)
+        setDebugMessages((prev) => {
+          const i = prev.findIndex((m) => m.id === assistantId)
+          if (i === -1) {
+            return [...prev, update({ id: assistantId, role: 'assistant', text: '', tools: [] })]
+          }
+          const next = [...prev]
+          next[i] = update(next[i])
+          return next
+        })
+      }
+
+      let gotContent = false
+      try {
+        await opts.stream({
+          onToken: (chunk) => {
+            gotContent = true
+            upsertAssistant((m) => ({ ...m, text: m.text + chunk }))
+          },
+          onTool: (tool) => {
+            gotContent = true
+            upsertAssistant((m) => ({ ...m, tools: [...(m.tools ?? []), tool] }))
+          },
+        })
+        if (!gotContent) {
+          upsertAssistant((m) => ({
+            ...m,
+            text: "I didn't get anything back for that — try again.",
+          }))
+        }
+      } catch (err) {
+        if (debugSessionRef.current !== session) return
+        setDebugMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), role: 'assistant', text: errorText(err), isError: true },
+        ])
+      } finally {
+        if (debugSessionRef.current === session) setDebugIsThinking(false)
+      }
+    },
+    [debugIsThinking],
+  )
+
+  const sendDebugMessage = useCallback(
+    async (raw: string) => {
+      const text = raw.trim()
+      if (!text || debugIsThinking) return
+      const history = debugMessages
+        .filter((m) => !m.isError)
+        .map((m) => ({ role: m.role, text: m.text }))
+      await runDebugStream({
+        userText: text,
+        stream: (handlers) => api.sendDebugChatStream(text, history, handlers),
+      })
+    },
+    [debugIsThinking, debugMessages, runDebugStream],
+  )
+
+  const checkLogs = useCallback(async () => {
+    if (debugIsThinking) return
+    await runDebugStream({
+      userText: 'Check logs',
+      stream: (handlers) => api.checkLogsStream(handlers),
+    })
+  }, [debugIsThinking, runDebugStream])
+
   const resolveAction = useCallback(
     async (messageId: string, actionId: string, verb: 'confirm' | 'cancel') => {
       const session = chatSessionRef.current
@@ -132,13 +215,20 @@ export default function App() {
   )
 
   const startNewChat = useCallback(() => {
+    if (view === 'debugging') {
+      debugSessionRef.current += 1
+      setDebugSession(debugSessionRef.current)
+      setDebugMessages([])
+      setDebugIsThinking(false)
+      return
+    }
     chatSessionRef.current += 1
     setChatSession(chatSessionRef.current)
     setMessages([])
     setIsThinking(false)
     setScan({ status: 'idle' })
-    setView('agent')
-  }, [])
+    if (view !== 'agent') setView('agent')
+  }, [view])
 
   const startScan = useCallback(async () => {
     setScan((prev) => (prev.status === 'scanning' ? prev : { status: 'scanning' }))
@@ -177,7 +267,7 @@ export default function App() {
     <div className="app">
       <Sidebar view={view} onSelect={setView} onNewChat={startNewChat} />
       <div className="main-column">
-        {view === 'agent' ? (
+        {view === 'agent' && (
           <ChatView
             key={chatSession}
             appName={APP_NAME}
@@ -187,8 +277,20 @@ export default function App() {
             onSend={sendMessage}
             onResolveAction={resolveAction}
           />
-        ) : (
+        )}
+        {view === 'resourceMap' && (
           <ResourceMapView headerMeta={headerMeta} scan={scan} onStartScan={startScan} />
+        )}
+        {view === 'debugging' && (
+          <DebuggingChatView
+            key={debugSession}
+            headerMeta={headerMeta}
+            messages={debugMessages}
+            isThinking={debugIsThinking}
+            checkLogsDisabled={debugIsThinking}
+            onCheckLogs={checkLogs}
+            onSend={sendDebugMessage}
+          />
         )}
       </div>
     </div>

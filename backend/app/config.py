@@ -23,5 +23,11 @@ class Settings(BaseSettings):
     agent_max_iterations: int = 10
     action_ttl_seconds: int = 1800
 
+    # Debugging / Check logs pipeline
+    debug_log_group: str = "my-container-logs"
+    debug_log_lookback_seconds: int = 3600
+    # Empty = resolve repo-root/hello-world relative to this package.
+    debug_code_root: str = ""
+
 
 settings = Settings()

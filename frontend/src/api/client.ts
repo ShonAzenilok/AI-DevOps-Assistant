@@ -71,6 +71,38 @@ type ChatStreamEvent =
   | { type: 'error'; detail: string }
   | { type: 'done' }
 
+async function readNdjsonStream(res: Response, handlers: ChatStreamHandlers): Promise<void> {
+  if (!res.body) throw new ApiError('Streaming is not supported by this browser')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  const handleLine = (line: string) => {
+    if (!line.trim()) return
+    let event: ChatStreamEvent
+    try {
+      event = JSON.parse(line) as ChatStreamEvent
+    } catch {
+      return
+    }
+    if (event.type === 'token') handlers.onToken(event.text)
+    else if (event.type === 'tool') handlers.onTool(event.tool)
+    else if (event.type === 'confirm') handlers.onConfirm?.(event.action)
+    else if (event.type === 'error') throw new ApiError(event.detail)
+  }
+
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) handleLine(line)
+  }
+  handleLine(buffer)
+}
+
 export const api = {
   /** Streams one agent turn, invoking handlers as tokens and tool calls arrive.
    *  Resolves when the turn completes; rejects with ApiError on failure. */
@@ -83,36 +115,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ message, history }),
     })
-    if (!res.body) throw new ApiError('Streaming is not supported by this browser')
-
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    const handleLine = (line: string) => {
-      if (!line.trim()) return
-      let event: ChatStreamEvent
-      try {
-        event = JSON.parse(line) as ChatStreamEvent
-      } catch {
-        return // ignore a malformed line rather than killing the stream
-      }
-      if (event.type === 'token') handlers.onToken(event.text)
-      else if (event.type === 'tool') handlers.onTool(event.tool)
-      else if (event.type === 'confirm') handlers.onConfirm?.(event.action)
-      else if (event.type === 'error') throw new ApiError(event.detail)
-    }
-
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? '' // last piece may be a partial line
-      for (const line of lines) handleLine(line)
-    }
-    handleLine(buffer)
+    await readNdjsonStream(res, handlers)
   },
+
+  async checkLogsStream(handlers: ChatStreamHandlers): Promise<void> {
+    const res = await fetchOrThrow('/debug/check-logs', { method: 'POST', body: '{}' })
+    await readNdjsonStream(res, handlers)
+  },
+
+  async sendDebugChatStream(
+    message: string,
+    history: ChatHistoryItem[],
+    handlers: ChatStreamHandlers,
+  ): Promise<void> {
+    const res = await fetchOrThrow('/debug/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, history }),
+    })
+    await readNdjsonStream(res, handlers)
+  },
+
   verifyAws(config: AwsConfig): Promise<AwsVerifyResponse> {
     return request('/aws/verify', { method: 'POST', body: JSON.stringify(config) })
   },

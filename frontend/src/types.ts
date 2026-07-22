@@ -1,6 +1,6 @@
 export type OnboardingStep = 'welcome' | 'aws'
 export type AppPhase = OnboardingStep | 'chat'
-export type MainView = 'agent' | 'resourceMap'
+export type MainView = 'agent' | 'resourceMap' | 'debugging'
 
 export interface AwsConfig {
   accessKeyId: string
