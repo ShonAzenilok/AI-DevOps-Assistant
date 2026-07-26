@@ -32,3 +32,15 @@ def parse_tool_arguments(raw: Any) -> dict[str, Any]:
 def truncate_output(text: str, limit: int = 8000) -> str:
     """Cap tool/action output length for NDJSON and API responses."""
     return text[:limit]
+
+
+def pretty_print_json(text: str) -> str:
+    """If text is JSON, return indented form; otherwise return unchanged."""
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return text
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return text
+    return json.dumps(parsed, indent=2, ensure_ascii=False, default=str)

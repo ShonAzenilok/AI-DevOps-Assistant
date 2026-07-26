@@ -29,7 +29,26 @@ React (Vite)  →  FastAPI  →  Amazon Bedrock + AWS MCP Server
 
 ## Quick start
 
-### 1. Backend
+### Docker (recommended)
+
+Requires [Docker](https://docs.docker.com/get-docker/) with Compose v2.
+
+```bash
+docker compose up --build
+```
+
+- App UI: [http://localhost](http://localhost) (nginx proxies `/api` to the backend)
+- Backend health: [http://localhost:8000/health](http://localhost:8000/health) or [http://localhost/health](http://localhost/health)
+
+AWS keys are entered in the UI during onboarding — no `.env` is required to run Compose. Defaults for Bedrock/MCP are baked into the backend.
+
+The backend image embeds `hello-world/` source for the Debugging / Check logs path jail. The standalone hello-world crash demo is still built separately — see [`hello-world/README.md`](hello-world/README.md).
+
+> If a root `.env` exists with freeform notes (not `KEY=value`), rename it before `docker compose` — Compose always tries to parse that file when present.
+
+### Local (without Docker)
+
+#### 1. Backend
 
 ```bash
 cd backend
@@ -39,7 +58,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 Health check: [http://127.0.0.1:8000/health](http://127.0.0.1:8000/health)
 
-### 2. Frontend
+#### 2. Frontend
 
 ```bash
 cd frontend
@@ -49,7 +68,7 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api/*` to the backend on port `8000`.
 
-### 3. Use the app
+#### 3. Use the app
 
 1. Complete onboarding with your AWS keys and region  
 2. Chat for read-only questions (e.g. “list my S3 buckets”)  
@@ -60,6 +79,7 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api/*` to th
 
 ```
 ├── backend/                 FastAPI + agent + MCP + Bedrock
+│   ├── Dockerfile
 │   ├── app/
 │   │   ├── api/             HTTP routes (/aws, /chat, /resources, /actions)
 │   │   ├── services/
@@ -72,6 +92,10 @@ Open [http://localhost:5173](http://localhost:5173). Vite proxies `/api/*` to th
 │   │   └── streaming/       NDJSON helpers
 │   └── tests/
 ├── frontend/                React + TypeScript + Vite + React Flow
+│   ├── Dockerfile
+│   └── nginx.conf           Proxies /api to backend in Compose
+├── docker-compose.yml
+├── hello-world/             Demo app (source also copied into backend image)
 └── README.md                You are here
 ```
 

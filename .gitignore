@@ -23,7 +23,7 @@ Desktop.ini
 *.key
 credentials.json
 secrets/
-
+.notes.txt
 # Python
 __pycache__/
 *.py[cod]

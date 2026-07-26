@@ -46,7 +46,9 @@ function ToolCard({ tools }: { tools: ToolCall[] }) {
                 <CheckIcon size={8} strokeWidth={3.5} />
               </span>
               <span className="tool-card__label">{t.label}</span>
-              <span className="tool-card__detail">{t.detail}</span>
+              <span className="tool-card__detail" title={t.detail}>
+                {t.detail}
+              </span>
               <span className="tool-card__duration">{formatDuration(t.durationMs)}</span>
               {hasOutput && (
                 <span className={`tool-card__chevron${isOpen ? ' tool-card__chevron--open' : ''}`}>

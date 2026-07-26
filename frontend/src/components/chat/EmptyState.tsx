@@ -1,7 +1,7 @@
 const SUGGESTIONS = [
   'Show my running EC2 instances',
-  "What's my AWS spend this month?",
-  'Review my Terraform plan',
+  'Show my Lambda functions',
+  'List my S3 buckets',
   'Any errors in the last hour?',
 ]
 

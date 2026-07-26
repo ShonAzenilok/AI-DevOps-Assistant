@@ -6,7 +6,13 @@ class Settings(BaseSettings):
 
     host: str = "127.0.0.1"
     port: int = 8000
-    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+    cors_origins: list[str] = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        # docker-compose frontend (nginx on :80)
+        "http://localhost",
+        "http://127.0.0.1",
+    ]
 
     aws_mcp_endpoint: str = "https://aws-mcp.us-east-1.api.aws/mcp"
     # SigV4 service name for the managed AWS MCP Server (inferred from endpoint hostname).

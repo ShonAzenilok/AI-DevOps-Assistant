@@ -7,9 +7,11 @@ from app.services.bedrock.client import (
     tools_to_bedrock,
 )
 from app.services.aws_cli.validator import cli_validator
+from app.services.mcp.helpers import pretty_print_json
 from app.services.mcp.tools import (
     build_action_summary,
     coerce_read_only_command,
+    extract_tool_output,
     find_search_doc_tool,
     is_destructive_tool_call,
     is_tool_error_output,
@@ -18,6 +20,28 @@ from app.services.mcp.tools import (
     resolve_tool_name,
 )
 from app.services.resources.scanner import build_scan_result
+
+
+def test_pretty_print_json_compacts_minified() -> None:
+    raw = '{"Reservations":[{"Instances":[{"InstanceId":"i-abc"}]}]}'
+    pretty = pretty_print_json(raw)
+    assert '"Reservations"' in pretty
+    assert "\n" in pretty
+    assert pretty_print_json("not json") == "not json"
+    assert pretty_print_json("Error: boom") == "Error: boom"
+
+
+def test_extract_tool_output_pretty_prints_text_blocks() -> None:
+    class _Block:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Result:
+        content = [_Block('{"Buckets":[{"Name":"demo"}]}')]
+
+    out = extract_tool_output(_Result())
+    assert '"Buckets"' in out
+    assert "\n" in out
 
 
 def test_parse_tool_call_dict_arguments() -> None:

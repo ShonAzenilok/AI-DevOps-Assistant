@@ -10,7 +10,12 @@ from mcp import ClientSession
 from mcp.types import Tool
 
 from app.models.schemas import ToolCall
-from app.services.mcp.helpers import parse_cli_head, parse_tool_arguments, truncate_output
+from app.services.mcp.helpers import (
+    parse_cli_head,
+    parse_tool_arguments,
+    pretty_print_json,
+    truncate_output,
+)
 
 AWS_CALL_TOOL_NAMES = frozenset(
     {
@@ -313,11 +318,10 @@ def extract_tool_output(result: Any) -> str:
                 parts.append(text)
             else:
                 parts.append(str(block))
-        return "\n".join(parts)
+        return pretty_print_json("\n".join(parts))
     if isinstance(result, dict):
-        return json.dumps(result, indent=2, default=str)
-    return str(result)
-
+        return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+    return pretty_print_json(str(result))
 
 def is_destructive_tool_call(tool_name: str, arguments: dict[str, Any]) -> bool:
     if DESTRUCTIVE_PATTERNS.search(tool_name):

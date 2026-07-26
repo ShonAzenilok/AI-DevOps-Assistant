@@ -46,7 +46,7 @@ export function Composer({ isThinking, onSend }: ComposerProps) {
           ref={textareaRef}
           value={input}
           rows={1}
-          placeholder="Ask about your infrastructure, costs, deployments..."
+          placeholder="Ask about your AWS resources, logs, or provision changes..."
           onChange={(e) => {
             setInput(e.target.value)
             autoGrow()
