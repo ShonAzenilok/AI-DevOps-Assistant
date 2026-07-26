@@ -267,7 +267,7 @@ export default function App() {
     <div className="app">
       <Sidebar view={view} onSelect={setView} onNewChat={startNewChat} />
       <div className="main-column">
-        {view === 'agent' && (
+        {view === 'agent' ? (
           <ChatView
             key={chatSession}
             appName={APP_NAME}
@@ -277,11 +277,9 @@ export default function App() {
             onSend={sendMessage}
             onResolveAction={resolveAction}
           />
-        )}
-        {view === 'resourceMap' && (
+        ) : view === 'resourceMap' ? (
           <ResourceMapView headerMeta={headerMeta} scan={scan} onStartScan={startScan} />
-        )}
-        {view === 'debugging' && (
+        ) : (
           <DebuggingChatView
             key={debugSession}
             headerMeta={headerMeta}
