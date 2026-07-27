@@ -24,7 +24,7 @@ React (Vite)  →  FastAPI  →  Amazon Bedrock + AWS MCP Server
 
 Pick one way to run the app:
 
-- **Docker** with Compose v2, **or**
+- **Docker** with Compose v2
 - **Python 3.11+** and **Node.js 20+** for local development
 
 AWS side:
